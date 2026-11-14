@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [".", "crates/*", "tools/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[package]
+name = "spawn-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
