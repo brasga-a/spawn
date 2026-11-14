@@ -1,0 +1,49 @@
+# spawn-reflect
+
+Local rules for `spawn-reflect` (crate). Global rules: [root AGENTS.md](../../AGENTS.md).
+
+## Purpose
+
+Runtime type metadata so other systems can inspect and manipulate data generically: serialization, editor inspectors, data validation, and (through `spawn-scripting`) controlled script exposure.
+
+## Responsibilities
+
+- Type/field descriptors, attributes, and registry (PLANNED; mechanism, e.g. derive macro, undecided).
+- Generic get/set access to described values with checked types.
+- Metadata that supports serialization and validation by other crates.
+
+## Non-Responsibilities
+
+- Serialization formats and files (`spawn-scene`, `spawn-assets`), component storage (`spawn-ecs`), editor UI (`spawn-editor`).
+- Deciding what scripts may access: allowlisting is `spawn-scripting`'s job. Reflection availability never implies script exposure.
+
+## Architectural Boundaries
+
+- Foundation-level; depends on no higher `spawn-*` crate. ECS, scene, editor, and scripting may depend on it.
+- A proc-macro would require a separate crate; not created here. Confirm before adding one.
+
+## Public API Guidelines
+
+- Metadata is read-only by default; mutation goes through checked accessors.
+- Opt-in per type/field; default is not reflected.
+
+## Internal Design Principles
+
+- Prefer static, compile-time-generated metadata over runtime discovery; keep registry lookups off hot paths.
+
+## Performance and Safety
+
+- Dynamic access must be type- and bounds-checked; mistyped access returns errors, not UB or panics.
+
+## Testing Requirements
+
+- Round-trip get/set tests, nested/enum cases, mistyped-access rejection.
+
+## Current Implementation Status
+
+`SCAFFOLD`. `src/lib.rs` is the unmodified `cargo new --lib` stub (an `add` function and an `it_works` test); `Cargo.toml` declares no dependencies and inherits `version`/`edition` from the workspace. No type metadata or derive exists. The stub is not API and must not be depended on or preserved.
+
+## Agent Instructions
+
+- Do not add serialization formats or editor UI here.
+- Do not treat reflection as the scripting allowlist.

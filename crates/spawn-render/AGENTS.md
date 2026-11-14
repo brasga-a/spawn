@@ -1,0 +1,53 @@
+# spawn-render
+
+Local rules for `spawn-render` (crate). Global rules: [root AGENTS.md](../../AGENTS.md).
+
+## Purpose
+
+Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipelines, and render-frame execution. Generic; contains no gameplay rules.
+
+## Responsibilities
+
+- GPU device/queue/surface management and resource lifetime (PLANNED; `wgpu` is a candidate, unadopted).
+- Shaders, materials, pipelines, render graph/passes, camera/view abstraction, mesh/texture GPU resources.
+- Extraction of renderable state from simulation into presentation state (simulation never touches GPU).
+- Debug draw primitives if a feature requires them.
+
+## Non-Responsibilities
+
+- Windows/surfaces creation (`spawn-platform`), in-game UI layout/widgets (`spawn-ui` supplies draw data), editor viewport UI (`spawn-editor`).
+- Asset identity/loading (`spawn-assets`), animation evaluation (`spawn-animation`), culling by physics queries (`spawn-physics`), gameplay effects (frameworks/Luau).
+- Anything weapon-, team-, or match-aware.
+
+## Architectural Boundaries
+
+- May depend on `spawn-math`, `spawn-assets`, and a platform surface handle; must not depend on `spawn-physics`, `spawn-network`, `spawn-scripting`, or tools.
+- `spawn-ui` and `spawn-editor` integrate through render-facing contracts, not by reaching into GPU internals.
+- Server/headless builds must not require this crate.
+
+## Public API Guidelines
+
+- Hide the graphics backend; no backend types in public APIs.
+- Resources are referenced by handles; frame data is plain data.
+
+## Internal Design Principles
+
+- Separate render world/state from simulation state; keep GPU code behind thin layers so logic (sorting, culling, batching) is headless-testable.
+- `unsafe` confined and justified.
+
+## Performance and Safety
+
+- Frame-time budgets, minimized state changes and allocations per frame, explicit GPU memory accounting; shader/asset inputs are untrusted — validate, never panic on device loss or bad shaders.
+
+## Testing Requirements
+
+- Headless unit tests for CPU-side logic; golden-image tests only if a headless adapter is available; benchmarks for frame extraction and culling.
+
+## Current Implementation Status
+
+`SCAFFOLD`. `src/lib.rs` is the unmodified `cargo new --lib` stub (an `add` function and an `it_works` test); `Cargo.toml` declares no dependencies and inherits `version`/`edition` from the workspace. No GPU, shader, material, or pipeline code exists. The stub is not API and must not be depended on or preserved.
+
+## Agent Instructions
+
+- Never add gameplay logic. Do not pick the GPU backend or add dependencies without confirmation and a recorded rationale.
+- Start from the minimal vertical slice (root roadmap: clear → triangle → mesh/camera); no premature render graph.
