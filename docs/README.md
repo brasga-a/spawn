@@ -1,0 +1,28 @@
+# Spawn Engineering Documentation
+
+> Status: **design baseline / not implemented**. This directory describes the first engineering milestone, not an already working engine. The repository's root [AGENTS.md](../AGENTS.md) and crate-level AGENTS.md files remain the authoritative ownership and agent-behavior rules.
+
+## Start here
+
+| Document | What it answers |
+| --- | --- |
+| [Foundation overview](foundation/README.md) | What are we building first, and what is not included? |
+| [Specification](foundation/SPEC.md) | What must the first executable slice do? |
+| [Technical design](foundation/DESIGN.md) | How do subsystems cooperate without coupling? |
+| [Invariants](foundation/INVARIANTS.md) | What must never be violated? |
+| [Verification plan](foundation/VERIFICATION.md) | How do we prove the requirements? |
+| [Delivery plan](foundation/PLAN.md) | In what order should changes land? |
+| [Architecture decisions](adr/README.md) | Which choices are proposed or accepted? |
+
+## Documentation hierarchy
+
+- **AGENTS.md:** enduring rules for coding agents, boundaries, and ownership.
+- **docs/foundation:** time-bounded, testable specification of Spawn's first running slice.
+- **docs/adr:** rationale and status of engineering decisions; proposed ADRs **do not authorize** implementation.
+- **Rust code and Cargo manifests:** the actual implemented state. If documentation disagrees with code, flag and resolve the conflict, do not assume the document was implemented.
+
+## Change policy
+
+When a foundation requirement changes, update its requirement ID, related invariants, verification cases, and affected ADRs in the same change. Do not silently promote *Proposed* decisions to *Accepted*. Do not invent API types or record speculative features as delivered.
+
+Scope at this stage: native application lifecycle, window, raw input events, semantic input sampling, a GPU-backed clear frame, graceful recovery, and headless timing tests. No FPS-specific behavior.
