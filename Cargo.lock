@@ -35,6 +35,10 @@ name = "spawn-engine"
 version = "0.1.0"
 
 [[package]]
+name = "spawn-input"
+version = "0.1.0"
+
+[[package]]
 name = "spawn-io"
 version = "0.1.0"
 
