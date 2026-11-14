@@ -9,7 +9,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 ## Responsibilities
 
 - Subsystem lifecycle contracts and engine-level orchestration vocabulary (PLANNED).
-- Fixed-timestep loop contract separating simulation ticks from presentation frames (see root §6). Scheduling of ECS systems stays in `spawn-ecs` (open question: root §12.5).
+- Fixed-timestep loop contract separating simulation ticks from presentation frames (see [root: ECS and System Design](../../AGENTS.md#ecs-and-system-design)). Scheduling of ECS systems stays in `spawn-ecs` (open question: [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)).
 - Shared error and identifier conventions only when two or more crates demonstrably need the same definition.
 
 ## Non-Responsibilities

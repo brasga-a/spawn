@@ -11,7 +11,7 @@ Owns the entity-component-system data model: entity identity, component storage,
 - Generational entity identifiers and entity lifecycle (spawn/despawn, liveness checks).
 - Component storage and archetype/table layout (PLANNED; layout decision is internal and not yet made).
 - Queries, filters, change detection, and deferred command buffers.
-- System definition, access declaration (read/write sets), and scheduling/parallel execution (see root §12.5 for the split with `spawn-core`).
+- System definition, access declaration (read/write sets), and scheduling/parallel execution (see [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions) for the split with `spawn-core`).
 - Events/resources scoped to ECS data if a concrete feature requires them.
 
 ## Non-Responsibilities

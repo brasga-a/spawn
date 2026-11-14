@@ -29,7 +29,7 @@ Runtime world management: owns the lifecycle of live worlds (create, activate, d
 ## Public API Guidelines
 
 - Worlds are referenced by generational handles; operations are explicit about being synchronous vs. asynchronous.
-- Server and client world roles are explicit in the API (root §7).
+- Server and client world roles are explicit in the API ([root: Multiplayer](../../AGENTS.md#multiplayer-foundational)).
 - Keep surface small until at least two real consumers exist.
 
 ## Internal Design Principles

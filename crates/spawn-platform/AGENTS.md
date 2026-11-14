@@ -11,7 +11,7 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 - Window creation and lifecycle, display/monitor information, surface handles for rendering (PLANNED).
 - Event loop and delivery of raw OS events (window, keyboard, mouse, gamepad connection) to consumers.
 - Platform-specific differences hidden behind one abstraction (Linux, Windows, macOS targets as decided).
-- Backend choice (`winit` presumed) is undecided: confirm before adopting (root §12.1).
+- Backend choice (`winit` presumed) is undecided: confirm before adopting ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)).
 
 ## Non-Responsibilities
 
@@ -21,7 +21,7 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 ## Architectural Boundaries
 
-- Must not depend on `spawn-render`, `spawn-input`, or `spawn-ui`; they consume platform events/handles. Whether raw event types live here or in `spawn-input` is open (root §12.1); do not create a cycle either way.
+- Must not depend on `spawn-render`, `spawn-input`, or `spawn-ui`; they consume platform events/handles. Whether raw event types live here or in `spawn-input` is open ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); do not create a cycle either way.
 - Headless operation must be possible: the engine (server, tests, CLI) runs without linking a window backend.
 
 ## Public API Guidelines

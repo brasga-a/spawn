@@ -9,7 +9,7 @@ Defines the scene data model and its persistence: scene structures, hierarchy, s
 ## Responsibilities
 
 - Scene/prefab data structures and parent-child hierarchy (PLANNED).
-- Serialization and deserialization with versioned, validated formats (format undecided, root §12.2); errors name file, field, reason.
+- Serialization and deserialization with versioned, validated formats (format undecided, [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); errors name file, field, reason.
 - Asset references (by asset ID, resolved by `spawn-assets`) and script references/bindings (by script identifier and declared API version; never script execution).
 - Migration between scene format versions.
 
@@ -22,7 +22,7 @@ Defines the scene data model and its persistence: scene structures, hierarchy, s
 
 ## Architectural Boundaries
 
-- Plausible dependencies: `spawn-reflect`, `spawn-math`, asset ID types. Whether it references ECS types directly is an open question (root §12.4).
+- Plausible dependencies: `spawn-reflect`, `spawn-math`, asset ID types. Whether it references ECS types directly is an open question ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)).
 - Must not depend on `spawn-world`, `spawn-scripting`, render, or physics. `spawn-world`, `spawn-editor`, and `spawn-cli` consume it.
 - Scene data never contains genre-specific schema in this crate; game/framework data extends it through reflection or opaque, validated component payloads.
 
@@ -53,4 +53,4 @@ Defines the scene data model and its persistence: scene structures, hierarchy, s
 ## Agent Instructions
 
 - Do not add script execution or world instantiation here.
-- Do not choose the serialization format without confirming and recording it in root §8.
+- Do not choose the serialization format without confirming and recording it in [root: Data-Driven Design and Scripting Security](../../AGENTS.md#data-driven-design-and-scripting-security).

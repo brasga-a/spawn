@@ -21,7 +21,7 @@ Animation runtime: skeletal poses, clip sampling, blending, state machines/graph
 ## Architectural Boundaries
 
 - May depend on `spawn-math` and `spawn-assets`; must not depend on `spawn-render`, `spawn-physics`, `spawn-scripting`, or gameplay crates.
-- Graph definitions are data (root §8).
+- Graph definitions are data ([root: Data-Driven Design and Scripting Security](../../AGENTS.md#data-driven-design-and-scripting-security)).
 
 ## Public API Guidelines
 

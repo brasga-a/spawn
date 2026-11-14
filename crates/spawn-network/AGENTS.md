@@ -47,4 +47,4 @@ Networking infrastructure for the server-authoritative model: transport, connect
 ## Agent Instructions
 
 - Answer 'what does the server do, what does the client predict, what is replicated' in design notes for any new feature.
-- Do not add gameplay semantics; do not add dependencies without root §4 justification.
+- Do not add gameplay semantics; do not add dependencies without [root: Workspace](../../AGENTS.md#workspace) justification.

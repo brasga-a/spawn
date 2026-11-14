@@ -17,12 +17,12 @@ Physics simulation: rigid bodies, collision detection, spatial queries (raycasts
 
 - Gameplay response to collisions (damage, pickups, abilities): frameworks and Luau reacting to events.
 - Character controller *rules* for a genre (framework), ECS storage (`spawn-ecs`), math primitives (`spawn-math`), rendering of debug shapes (`spawn-render`), replication (`spawn-network`).
-- Build-vs-integrate decision is open (root §12.3); until decided do not add a physics library.
+- Build-vs-integrate decision is open ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); until decided do not add a physics library.
 
 ## Architectural Boundaries
 
 - May depend on `spawn-math`; may expose ECS-facing integration without ECS depending on it. Must not depend on render, scripting, ui, or gameplay crates.
-- Does not assume the full simulation is deterministic (root §7) and must not be contorted to be.
+- Does not assume the full simulation is deterministic ([root: Multiplayer](../../AGENTS.md#multiplayer-foundational)) and must not be contorted to be.
 
 ## Public API Guidelines
 

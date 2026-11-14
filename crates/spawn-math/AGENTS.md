@@ -21,7 +21,7 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 ## Architectural Boundaries
 
 - Foundation crate: depends on no other `spawn-*` crate. Any crate may depend on it.
-- Using an external math crate (e.g. `glam`) is an unadopted option: either wrap or re-export decisions must be recorded in root §4 per the dependency rules. Do not leak a third-party type into public APIs unintentionally.
+- Using an external math crate (e.g. `glam`) is an unadopted option: either wrap or re-export decisions must be recorded in [root: Workspace](../../AGENTS.md#workspace) per the dependency rules. Do not leak a third-party type into public APIs unintentionally.
 
 ## Public API Guidelines
 

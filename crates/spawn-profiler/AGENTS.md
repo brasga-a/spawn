@@ -42,5 +42,5 @@ Observability infrastructure: frame and system timing, counters, structured span
 
 ## Agent Instructions
 
-- Build only when the first real system needs instrumentation (root §9); no speculative framework.
+- Build only when the first real system needs instrumentation ([root: Engineering Standards](../../AGENTS.md#engineering-standards)); no speculative framework.
 - Do not add gameplay-specific metrics.

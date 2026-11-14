@@ -24,7 +24,7 @@ The only crate that integrates Luau (via `mlua`, PLANNED): VM management, script
 
 ## Architectural Boundaries
 
-- Sole owner of `mlua`; no other crate imports `mlua` types (root §3). Verify mlua's Luau feature support before adding it and pin in `[workspace.dependencies]`.
+- Sole owner of `mlua`; no other crate imports `mlua` types ([root: Rust and Luau](../../AGENTS.md#rust-and-luau)). Verify mlua's Luau feature support before adding it and pin in `[workspace.dependencies]`.
 - Higher layer: may depend on `spawn-ecs`, `spawn-math`, `spawn-reflect`, `spawn-assets` as needed; engine systems must not depend on it — they define traits/events/commands it implements or consumes.
 - Must not expose raw Rust structures, pointers, ECS internals, or filesystem/OS/network access.
 

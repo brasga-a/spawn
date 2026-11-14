@@ -10,18 +10,18 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 
 - Device abstraction for keyboard, mouse, gamepad, touch (PLANNED) and device connect/disconnect.
 - Input state (pressed/held/released, axes) and action layer with bindings/rebinding, contexts, dead zones, sensitivity.
-- Sampling input into timestamped, serializable input commands suitable for fixed-timestep simulation, client prediction, and input replay (root §7).
+- Sampling input into timestamped, serializable input commands suitable for fixed-timestep simulation, client prediction, and input replay ([root: Multiplayer](../../AGENTS.md#multiplayer-foundational)).
 - Input recording/playback support if a feature requires it.
 
 ## Non-Responsibilities
 
 - OS windows and raw system events (`spawn-platform`) — this crate consumes them, it does not own them.
-- File access for mapping persistence (`spawn-io`, data format per root §8), UI focus/navigation (`spawn-ui`), network transport (`spawn-network`).
+- File access for mapping persistence (`spawn-io`, data format per [root: Data-Driven Design and Scripting Security](../../AGENTS.md#data-driven-design-and-scripting-security)), UI focus/navigation (`spawn-ui`), network transport (`spawn-network`).
 - Gameplay reaction to actions (frameworks, Luau): input never decides outcomes.
 
 ## Architectural Boundaries
 
-- Receives raw events from `spawn-platform` through types owned by one of the two crates (open, root §12.1); must not depend on `spawn-render`, `spawn-physics`, or gameplay crates.
+- Receives raw events from `spawn-platform` through types owned by one of the two crates (open, [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); must not depend on `spawn-render`, `spawn-physics`, or gameplay crates.
 - Action definitions are data; no genre-specific actions (`Fire`, `Reload`) in this crate: games/frameworks define them.
 
 ## Public API Guidelines

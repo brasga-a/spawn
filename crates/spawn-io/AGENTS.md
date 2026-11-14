@@ -17,7 +17,7 @@ Low-level data input/output: filesystem operations, byte streams, virtual paths/
 
 - Keyboard/mouse/gamepad input (`spawn-input`) and windowing/OS events (`spawn-platform`).
 - Asset identity, parsing, caching (`spawn-assets`); scene/data formats (`spawn-scene`); network sockets (`spawn-network`).
-- Exposing any I/O to Luau: scripts get no filesystem access (root §8).
+- Exposing any I/O to Luau: scripts get no filesystem access ([root: Data-Driven Design and Scripting Security](../../AGENTS.md#data-driven-design-and-scripting-security)).
 
 ## Architectural Boundaries
 
