@@ -8,21 +8,22 @@ Physics simulation: rigid bodies, collision detection, spatial queries (raycasts
 
 ## Responsibilities
 
-- Physical state, integration, constraints, and a fixed-timestep step API (PLANNED).
+- Collision detection, spatial queries and a kinematic character controller, all in-house ([ADR-0005](../../docs/adr/0005-physics-strategy.md), accepted; PLANNED).
+- Rigid-body state, integration, constraints and a fixed-timestep step API (PLANNED; approach decided by the dynamics evaluation in ADR-0005).
 - Collision detection (broadphase, narrowphase), shapes, layers/filters, contact/trigger events.
-- Spatial queries used by character movement and hit registration (queries are owned here; the hit-registration *rules* live in the FPS framework/server logic).
+- Spatial queries used by character movement and hit registration, including queries against a bounded, tick-indexed history of poses for lag compensation (the hit-registration *rules* live in the FPS framework/server logic).
 - Physics-side state snapshotting needed for rollback/reconciliation where decided.
 
 ## Non-Responsibilities
 
 - Gameplay response to collisions (damage, pickups, abilities): frameworks and Luau reacting to events.
-- Character controller *rules* for a genre (framework), ECS storage (`spawn-ecs`), math primitives (`spawn-math`), rendering of debug shapes (`spawn-render`), replication (`spawn-network`).
-- Build-vs-integrate decision is open ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); until decided do not add a physics library.
+- Genre movement rules (acceleration curves, sprint, slide, mantle, tuning) in the FPS framework; this crate owns only the generic controller mechanism (collide-and-slide, step-up, slopes, ground detection, depenetration); ECS storage (`spawn-ecs`), math primitives (`spawn-math`), rendering of debug shapes (`spawn-render`), replication (`spawn-network`).
+- Rigid-body dynamics library or solver: none until the dynamics evaluation of [ADR-0005](../../docs/adr/0005-physics-strategy.md) produces its own ADR.
 
 ## Architectural Boundaries
 
 - May depend on `spawn-math`; may expose ECS-facing integration without ECS depending on it. Must not depend on render, scripting, ui, or gameplay crates.
-- Does not assume the full simulation is deterministic ([root: Multiplayer](../../AGENTS.md#multiplayer-foundational)) and must not be contorted to be.
+- Does not assume the full simulation is deterministic ([root: Multiplayer](../../AGENTS.md#multiplayer-foundational)) and must not be contorted to be. Movement code used in prediction must be deterministic across Windows and Linux and uses `spawn-math` functions for transcendental math.
 
 ## Public API Guidelines
 
@@ -48,4 +49,4 @@ Physics simulation: rigid bodies, collision detection, spatial queries (raycasts
 ## Agent Instructions
 
 - Do not add damage, health, weapon, or vehicle-gameplay concepts. Start with what the character controller needs (root roadmap).
-- Record the build-vs-integrate decision here before adding code.
+- Follow the references and license notes in ADR-0005; a Rust implementation that closely follows Jolt keeps Jolt's MIT notice. Never copy Quake/Source code.

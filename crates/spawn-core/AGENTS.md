@@ -9,7 +9,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 ## Responsibilities
 
 - Subsystem lifecycle contracts and engine-level orchestration vocabulary (PLANNED).
-- Fixed-timestep loop contract separating simulation ticks from presentation frames (see [root: ECS and System Design](../../AGENTS.md#ecs-and-system-design)). Scheduling of ECS systems stays in `spawn-ecs` (open question: [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)).
+- Fixed-timestep loop contract separating simulation ticks from presentation frames (see [root: ECS and System Design](../../AGENTS.md#ecs-and-system-design)). Scheduling of ECS systems stays in `spawn-ecs` (accepted in [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md); driving the loop belongs to the root composition binary).
 - Shared error and identifier conventions only when two or more crates demonstrably need the same definition.
 
 ## Non-Responsibilities
@@ -54,3 +54,5 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 - Before adding anything here, check whether `spawn-math`, `spawn-io`, `spawn-profiler`, or `spawn-ecs` owns it.
 - Do not add dependencies on any `spawn-*` crate.
 - Remove the `add` stub when the first real item lands.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors).
+- The job system is **not** part of this crate; it lives in the planned `spawn-jobs` crate ([ADR-0012](../../docs/adr/0012-job-system.md), accepted).

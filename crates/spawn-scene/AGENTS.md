@@ -54,3 +54,4 @@ Defines the scene data model and its persistence: scene structures, hierarchy, s
 
 - Do not add script execution or world instantiation here.
 - Do not choose the serialization format without confirming and recording it in [root: Data-Driven Design and Scripting Security](../../AGENTS.md#data-driven-design-and-scripting-security).
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (no dependency on `spawn-ecs`), [ADR-0013](../../docs/adr/0013-declarative-data-format.md) (RON).

@@ -48,3 +48,5 @@ Networking infrastructure for the server-authoritative model: transport, connect
 
 - Answer 'what does the server do, what does the client predict, what is replicated' in design notes for any new feature.
 - Do not add gameplay semantics; do not add dependencies without [root: Workspace](../../AGENTS.md#workspace) justification.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0016](../../docs/adr/0016-networking-and-replication.md) (transport, replication).
+- Accepted decisions governing this crate: [ADR-0019](../../docs/adr/0019-anti-cheat-and-client-trust.md) (client trust, validation, information minimization).

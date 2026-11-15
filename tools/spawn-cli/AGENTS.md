@@ -46,3 +46,5 @@ Command-line tooling for development workflows: project creation, building, runn
 
 - If logic would be useful to the engine or other tools, put it in the owning crate and call it.
 - Do not add third-party dependencies (e.g. an argument parser) without [root: Workspace](../../AGENTS.md#workspace) justification.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader compilation).
+- Accepted decisions governing this tool: [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (import and cooking, including the ufbx FBX importer, which must stay confined to this tool).

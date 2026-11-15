@@ -20,7 +20,7 @@ Arrows above show the executable **uses** libraries, not literal Rust dependenci
 ## Lifecycle proposal
 
 1. Validate runtime options (do not build a large configuration system).
-2. Establish logging/diagnostics and a monotonic timing source.
+2. Establish diagnostics and a monotonic timing source. The composition root owns both: it writes diagnostics to stderr using `std` only and reads monotonic time, passing elapsed durations to `spawn-core` (core never reads OS time itself). Structured logging belongs to `spawn-profiler` and needs its own dependency decision; it is not part of this milestone.
 3. Create the event loop and window on the thread required by the selected platform backend.
 4. Obtain an appropriate window/surface capability without exposing a renderer implementation through `spawn-platform`.
 5. Initialize rendering and configure the current non-zero surface dimensions.

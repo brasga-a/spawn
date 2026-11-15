@@ -11,7 +11,7 @@ Owns the entity-component-system data model: entity identity, component storage,
 - Generational entity identifiers and entity lifecycle (spawn/despawn, liveness checks).
 - Component storage and archetype/table layout (PLANNED; layout decision is internal and not yet made).
 - Queries, filters, change detection, and deferred command buffers.
-- System definition, access declaration (read/write sets), and scheduling/parallel execution (see [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions) for the split with `spawn-core`).
+- System definition, access declaration (read/write sets), and scheduling/parallel execution (split with `spawn-core` accepted in [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md)).
 - Events/resources scoped to ECS data if a concrete feature requires them.
 
 ## Non-Responsibilities
@@ -59,3 +59,5 @@ Owns the entity-component-system data model: entity identity, component storage,
 - Do not define gameplay components or world/scene types here.
 - Do not choose storage layout or scheduler design without recording the rationale in this file.
 - Keep ECS usable without any renderer, physics, or scripting crate (headless).
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (scene instantiation).
+- Accepted decisions governing this crate: [ADR-0011](../../docs/adr/0011-ecs-architecture.md) (ECS design).

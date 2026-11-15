@@ -55,3 +55,4 @@ Runtime world management: owns the lifecycle of live worlds (create, activate, d
 
 - Do not put storage, scene serialization, or tooling logic here; reference the owning crate.
 - Do not add streaming before a basic single-world lifecycle exists.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (scene instantiation through the reflection registry).

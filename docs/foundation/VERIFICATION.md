@@ -16,14 +16,14 @@ Once implementation exists, run the normal workspace formatting/lint/test gates 
 | FND-T06 | FR-05 / INV-05 | Resize to zero, then back to valid pixels. | No acquire/present at zero size; resumes on valid size. |
 | FND-T07 | FR-06 / INV-06,12 | Inject recoverable surface failure and reconfigure request. | Bounded recovery without resetting simulation clock; diagnostic status returned. |
 | FND-T08 | FR-10 / INV-04,12 | Fail successive initialization steps. | Prior owned resources released exactly once, no panic. |
-| FND-T09 | NFR-01,02 / INV-01,02,13,14 | Inspect manifests, public API and crate imports. | Acyclic dependencies and no out-of-scope contracts. |
+| FND-T09 | NFR-01,02 / INV-01,02,13,14 | Inspect manifests, public API, crate imports, and `cargo tree` for `spawn-input` and `spawn-core`. | Acyclic dependencies, no out-of-scope contracts, and no native window/GPU backend in headless crates. |
 | FND-T10 | FR-03 / INV-04,12 | Deliver repeated close requests. | Idempotent request handling, orderly stop. |
 
 Prefer fake clocks, synthetic event queues and mock surface state machines. GPU-driven behavior is not suitable as a mandatory CI-only unit test.
 
 ## Manual smoke tests (record environment)
 
-On **at least one explicitly named tested platform**, record:
+On **at least one explicitly named tested platform**, record (first platform: the reference hardware in root [Accepted Decisions](../../AGENTS.md#accepted-decisions), Linux/Wayland/Hyprland):
 - OS/version, compositor (e.g., Wayland/X11 where applicable), graphics device/driver and backend version.
 - Window appears; clear color is visible; repeated frames present without runaway CPU usage.
 - Drag resize, change DPI/scale if available, minimize/restore, close using native control.
@@ -31,7 +31,7 @@ On **at least one explicitly named tested platform**, record:
 - Expected behavior on unavailable display/GPU; structured failure rather than panic or hang.
 - Repeat launch/close and note unexpected logs, leaks or lingering processes.
 
-A documented Linux-only smoke run does **not** imply Windows/macOS support.
+A documented Linux-only smoke run does **not** imply Windows support. macOS is not a target.
 
 ## Traceability
 

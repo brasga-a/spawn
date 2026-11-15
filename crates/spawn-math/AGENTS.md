@@ -8,7 +8,7 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 
 ## Responsibilities
 
-- Linear algebra and geometry primitives and their operations (PLANNED).
+- Linear algebra and geometry primitives and their operations, including `f64` world-position types distinct from `f32` local types (PLANNED; [ADR-0010](../../docs/adr/0010-math-library.md), accepted).
 - Deterministic, documented numeric behavior (floating-point conventions, handedness, units, angle conventions).
 - Compact serialization-friendly layouts for types sent over the network or stored in assets.
 
@@ -43,7 +43,7 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 
 - Unit tests for identities and edge cases (zero vectors, gimbal cases, denormals).
 - Property-based tests for algebraic laws (e.g. rotation composition, inverse round-trips) with tolerances.
-- Determinism tests for any operation used in prediction/reconciliation.
+- Determinism tests for any operation used in prediction/reconciliation, comparing Windows and Linux results ([ADR-0005](../../docs/adr/0005-physics-strategy.md): movement code must not rely on platform math libraries for transcendental functions).
 
 ## Current Implementation Status
 
@@ -54,3 +54,4 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 - Do not add physics, rendering, or gameplay helpers.
 - Document convention changes as breaking and update all dependents' docs.
 - Confirm with the user before adopting an external math dependency.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0010](../../docs/adr/0010-math-library.md) (types, conventions, deterministic subset).

@@ -50,3 +50,4 @@ Low-level data input/output: filesystem operations, byte streams, virtual paths/
 
 - Do not add input-device or windowing code.
 - Do not add asset parsing; stop at bytes and streams.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (archive mounts for shipping builds).

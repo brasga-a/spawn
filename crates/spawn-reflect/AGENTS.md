@@ -47,3 +47,4 @@ Runtime type metadata so other systems can inspect and manipulate data generical
 
 - Do not add serialization formats or editor UI here.
 - Do not treat reflection as the scripting allowlist.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (component type registry).

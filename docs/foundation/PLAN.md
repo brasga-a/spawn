@@ -6,7 +6,7 @@
 
 | Phase | Deliverable | Exit evidence |
 | --- | --- | --- |
-| 0. Decisions | Review and accept/adjust ADRs 0001–0003. Choose target smoke-test platform. | Accepted ADRs and recorded platform scope. |
+| 0. Decisions | Accept ADRs 0001–0004 and choose the smoke-test platform. **Done:** ADRs accepted; first platform Linux/Wayland (Hyprland). | Accepted ADRs and recorded platform scope. |
 | 1. Clock contract | Fixed-step timing policy in `spawn-core` with injected elapsed durations. | T01, T02 headless tests passing. |
 | 2. Platform | Small native window/event pump with raw event mapping in `spawn-platform`. | Window visible, close works, T05 and T10 as applicable. |
 | 3. Renderer | Surface/device setup, clear/present and resize/recovery policy in `spawn-render`. | Clear frame; T06, T07, manual resize/minimize. |

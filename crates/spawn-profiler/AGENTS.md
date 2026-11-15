@@ -44,3 +44,4 @@ Observability infrastructure: frame and system timing, counters, structured span
 
 - Build only when the first real system needs instrumentation ([root: Engineering Standards](../../AGENTS.md#engineering-standards)); no speculative framework.
 - Do not add gameplay-specific metrics.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (logging facade), [ADR-0020](../../docs/adr/0020-memory-strategy.md) (allocation tracking).

@@ -21,7 +21,7 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 
 ## Architectural Boundaries
 
-- Receives raw events from `spawn-platform` through types owned by one of the two crates (open, [root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); must not depend on `spawn-render`, `spawn-physics`, or gameplay crates.
+- Receives raw events from `spawn-platform` through types owned by `spawn-platform` ([ADR-0002](../../docs/adr/0002-platform-owns-raw-input-events.md), accepted), depending on it without its native backend feature; must not depend on `spawn-render`, `spawn-physics`, or gameplay crates.
 - Action definitions are data; no genre-specific actions (`Fire`, `Reload`) in this crate: games/frameworks define them.
 
 ## Public API Guidelines
@@ -50,3 +50,4 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 
 - Do not add windowing or OS event code.
 - Do not hard-code genre actions or key bindings.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0018](../../docs/adr/0018-gamepad-input.md) (gamepad as a device).

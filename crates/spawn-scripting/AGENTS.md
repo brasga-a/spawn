@@ -55,3 +55,4 @@ The only crate that integrates Luau (via `mlua`, PLANNED): VM management, script
 - Never add an API without documentation, version, tests, and server/client scoping.
 - Never expose a convenience shortcut around the boundary; add the API deliberately instead.
 - Do not add `mlua` until the task explicitly asks for it.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0017](../../docs/adr/0017-luau-scripting-runtime.md) (Luau runtime).

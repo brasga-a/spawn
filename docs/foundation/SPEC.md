@@ -23,7 +23,7 @@ This is **not** a full game loop with ECS gameplay, physics, networking, scripts
 | FND-FR-08 | Long elapsed-time gaps do not create an unbounded catch-up loop. | Unit test verifies configured maximum simulation steps per update and documented backlog policy. |
 | FND-FR-09 | Input state captures press/release and pointer motion and can be sampled per simulation tick. | Synthetic input tests confirm press/hold/release semantics and that actions are not processed twice accidentally. |
 | FND-FR-10 | Initialization and shutdown respect resource ownership; partially initialized startup can unwind safely. | Failure-injection or state-machine tests cover each supported initialization failure edge. |
-| FND-FR-11 | The application exposes understandable diagnostics for startup, device/surface failures and shutdown. | Runbook enumerates expected diagnostics; errors include context without leaking backend internals as public API. |
+| FND-FR-11 | The application exposes understandable diagnostics for startup, device/surface failures and shutdown. | The [manual smoke test](VERIFICATION.md#manual-smoke-tests-record-environment) records the diagnostics observed for each failure case; errors include context without leaking backend internals as public API. |
 
 ## Non-functional requirements
 
@@ -42,9 +42,11 @@ ECS system scheduling/implementation, physics, Luau, networking, resource/asset 
 
 ## Assumptions and blockers
 
-- A graphics backend and a window backend must be **accepted** via [ADR-0001](../adr/0001-window-render-backends.md) before implementation. `winit` and `wgpu` are proposals only.
-- Ownership of raw event types and the platform→input boundary must be accepted via [ADR-0002](../adr/0002-event-ownership.md).
-- The composition root/clock ownership and scheduling boundary must be accepted via [ADR-0003](../adr/0003-loop-ownership.md).
+- Platform layer: in-house, Windows and Linux, accepted in [ADR-0001](../adr/0001-in-house-platform-layer.md). macOS is out of scope.
+- Graphics: in-house graphics API over Vulkan 1.3, accepted in [ADR-0004](../adr/0004-in-house-graphics-api.md).
+- Raw event ownership and the platform→input boundary: accepted in [ADR-0002](../adr/0002-platform-owns-raw-input-events.md).
+- Composition root, clock ownership and scheduling boundary: accepted in [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md).
+- First smoke-test platform: Linux on Wayland (Hyprland).
 - Platform support is only claimed for environments actually smoke-tested. Headless CI must not require graphics hardware.
 
 ## Definition of done

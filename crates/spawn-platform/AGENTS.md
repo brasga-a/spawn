@@ -10,8 +10,8 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 - Window creation and lifecycle, display/monitor information, surface handles for rendering (PLANNED).
 - Event loop and delivery of raw OS events (window, keyboard, mouse, gamepad connection) to consumers.
-- Platform-specific differences hidden behind one abstraction (Linux, Windows, macOS targets as decided).
-- Backend choice (`winit` presumed) is undecided: confirm before adopting ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)).
+- Platform-specific differences hidden behind one abstraction (Windows and Linux; see [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md)).
+- In-house OS backends for Windows (Win32) and Linux (Wayland and X11); macOS is not supported. Spawn owns the event loop. Accepted in [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md). Per [ADR-0002](../../docs/adr/0002-platform-owns-raw-input-events.md) (accepted), the native backend is compiled only behind a Cargo feature; raw event types are available without it.
 
 ## Non-Responsibilities
 
@@ -21,17 +21,17 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 ## Architectural Boundaries
 
-- Must not depend on `spawn-render`, `spawn-input`, or `spawn-ui`; they consume platform events/handles. Whether raw event types live here or in `spawn-input` is open ([root: Open Architectural Questions](../../AGENTS.md#open-architectural-questions)); do not create a cycle either way.
+- Must not depend on `spawn-render`, `spawn-input`, or `spawn-ui`; they consume platform events/handles. Raw event types live here ([ADR-0002](../../docs/adr/0002-platform-owns-raw-input-events.md), accepted); never depend on `spawn-input`.
 - Headless operation must be possible: the engine (server, tests, CLI) runs without linking a window backend.
 
 ## Public API Guidelines
 
-- Expose engine-defined types, not backend types (no `winit` types in the public API).
+- Expose engine-defined types, not backend types (no OS handles, binding-crate types, or protocol objects in the public API).
 - Event delivery is explicit about thread and ordering guarantees.
 
 ## Internal Design Principles
 
-- Backend dependency isolated in this crate; `unsafe`/FFI for OS handles is confined here with `// SAFETY:` comments.
+- OS calls are confined to per-OS backend modules behind Cargo features; all `unsafe`/FFI lives there with `// SAFETY:` comments.
 - Window/GPU code sits behind thin layers so logic stays headless-testable.
 
 ## Performance and Safety
@@ -50,3 +50,4 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 - Do not add input mapping or action logic.
 - Do not select a windowing backend without user confirmation.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0018](../../docs/adr/0018-gamepad-input.md) (gamepad backends).

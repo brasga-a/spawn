@@ -53,3 +53,5 @@ Asset management: stable asset identity, loading, caching, dependency tracking, 
 
 - Do not implement format-specific decoding for other subsystems here.
 - Reuse `spawn-io` for access; do not call `std::fs` directly in this crate once `spawn-io` exists.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0020](../../docs/adr/0020-memory-strategy.md) (budgets).
+- Accepted decisions governing this crate: [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (identity, cooking, loading).

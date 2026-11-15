@@ -8,7 +8,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Responsibilities
 
-- GPU device/queue/surface management and resource lifetime (PLANNED; `wgpu` is a candidate, unadopted).
+- GPU device/queue/surface management and resource lifetime (PLANNED; in-house graphics API over Vulkan as a private module, accepted in [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md); `wgpu` is a design reference, not a dependency).
 - Shaders, materials, pipelines, render graph/passes, camera/view abstraction, mesh/texture GPU resources.
 - Extraction of renderable state from simulation into presentation state (simulation never touches GPU).
 - Debug draw primitives if a feature requires them.
@@ -21,13 +21,13 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Architectural Boundaries
 
-- May depend on `spawn-math`, `spawn-assets`, and a platform surface handle; must not depend on `spawn-physics`, `spawn-network`, `spawn-scripting`, or tools.
+- May depend on `spawn-math`, `spawn-assets`, and a window handle (per [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md), accepted: through `raw-window-handle` traits, without depending on `spawn-platform`); must not depend on `spawn-physics`, `spawn-network`, `spawn-scripting`, or tools.
 - `spawn-ui` and `spawn-editor` integrate through render-facing contracts, not by reaching into GPU internals.
 - Server/headless builds must not require this crate.
 
 ## Public API Guidelines
 
-- Hide the graphics backend; no backend types in public APIs.
+- Hide the graphics backend; no Vulkan or RHI-internal types in public APIs.
 - Resources are referenced by handles; frame data is plain data.
 
 ## Internal Design Principles
@@ -51,3 +51,4 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 - Never add gameplay logic. Do not pick the GPU backend or add dependencies without confirmation and a recorded rationale.
 - Start from the minimal vertical slice (root roadmap: clear → triangle → mesh/camera); no premature render graph.
+- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0010](../../docs/adr/0010-math-library.md) (reversed-Z, conventions).

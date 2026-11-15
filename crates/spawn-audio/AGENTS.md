@@ -8,8 +8,9 @@ Audio runtime: device output, playback, mixing, and spatial sound.
 
 ## Responsibilities
 
-- Audio device/stream management and mixing graph (PLANNED).
-- Sound instances/voices, buses, effects, 3D spatialization, attenuation, listener state.
+- In-house output backends: WASAPI on Windows, PipeWire on Linux, plus a null backend ([ADR-0006](../../docs/adr/0006-in-house-audio.md); PLANNED).
+- In-house mixing graph, buses, effects, voice management (priorities, limits, virtualization) and HDR-style dynamic mixing (PLANNED).
+- Sound instances/voices, buses, effects, listener state, and in-house 3D spatialization (HRTF, attenuation, simple occlusion). Steam Audio may later provide propagation/reflections as DSP inside the mixer, behind a Cargo feature, only through its own ADR ([ADR-0006](../../docs/adr/0006-in-house-audio.md)).
 - Streaming vs. resident audio policies.
 
 ## Non-Responsibilities
@@ -18,7 +19,7 @@ Audio runtime: device output, playback, mixing, and spatial sound.
 
 ## Architectural Boundaries
 
-- May depend on `spawn-math`, `spawn-assets`; must not depend on render, physics, scripting, or gameplay crates. Optional: not linked by games without audio, nor by dedicated servers.
+- May depend on `spawn-math`, `spawn-assets`; must not depend on render, physics, scripting, or gameplay crates. Occlusion/obstruction values are supplied per voice by higher layers. No FMOD/Wwise or other royalty-bearing middleware. Optional: not linked by games without audio, nor by dedicated servers.
 
 ## Public API Guidelines
 

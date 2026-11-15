@@ -12,6 +12,15 @@ Authoritative architectural reference for coding agents. Nested `AGENTS.md` file
 
 Never invent crates, modules, dependencies, or APIs. Verify against the tree and `Cargo.toml` files before asserting anything exists.
 
+**Document precedence.** Engineering documentation lives in [`docs/`](docs/README.md): milestone specifications in [`docs/foundation/`](docs/foundation/README.md) and decision records in [`docs/adr/`](docs/adr/README.md). When documents conflict:
+
+1. This file governs global rules, layering, and ownership.
+2. A crate/tool `AGENTS.md` governs local rules within those limits.
+3. `docs/foundation/` defines milestone requirements and must stay within the rules above.
+4. ADRs record rationale. A *Proposed* ADR authorizes nothing; an *Accepted* ADR is synchronized into the affected `AGENTS.md` files in the same change.
+
+Code and manifests are the only evidence of what is implemented. A conflict between documents is reported and fixed in the change that finds it, never resolved silently.
+
 ---
 
 ## Vision
@@ -53,8 +62,9 @@ Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/
 Conventions:
 - One crate per subsystem with a narrow public API; names `spawn-<subsystem>`.
 - Add a dependency edge only when real code needs it; lower layers must not depend on higher ones.
+- Minimal dependencies per crate: every crate must build and test with the fewest `spawn-*` and external dependencies possible. Native or heavy backends sit behind Cargo features so consumers that only need a crate's types (headless tests, dedicated servers) do not link them. This isolates compilation and error attribution; runtime containment still relies on typed errors instead of panics.
 - Do not assume every crate depends on `spawn-core`. Prefer small shared contracts and dependency inversion (the higher layer implements a trait/contract owned by the lower one) over upward references.
-- Third-party deps: state what, why not std/hand-written, maintenance health, compile-time cost, licence; declare in `[workspace.dependencies]` with `default-features = false` where possible. Candidates (unadopted; verify first): `winit`, `wgpu`, `mlua`, `glam`, a physics library (build vs. integrate: decide deliberately and record why), `tracing`, `egui` (editor only).
+- Third-party deps: state what, why not std/hand-written, maintenance health, compile-time cost, licence; declare in `[workspace.dependencies]` with `default-features = false` where possible. Accepted by ADR but not yet added: `windows-sys`, `wayland-client`, `wayland-protocols`, `x11rb`, `xkbcommon`, `raw-window-handle`, `ash` (see [Accepted Decisions](#accepted-decisions)). Candidates (unadopted; verify first): `mlua`, `glam`, an audio decoder (`symphonia` or `libopus`, per ADR-0006), `tracing`, `egui` (editor only). No physics library until the dynamics evaluation of ADR-0005. No royalty-bearing or revenue-tied dependency (e.g. FMOD, Wwise, Havok); royalty-free proprietary SDKs (e.g. Steamworks) only in optional integration crates ([ADR-0008](docs/adr/0008-third-party-license-policy.md)).
 - Workspace membership (`.`, `crates/*`, `tools/*`) matches the directories on disk: the root package, 18 packages under `crates/`, and 3 under `tools/`. Each has an `AGENTS.md` (map below); packages outside those globs are not part of the workspace.
 
 ## Subsystem Responsibility Map
@@ -81,6 +91,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-ui](crates/spawn-ui/AGENTS.md) | In-game UI runtime (layout, widgets, HUD) | SCAFFOLD |
 | [spawn-scripting](crates/spawn-scripting/AGENTS.md) | Luau VM, sandbox, script lifecycle, exposed API | SCAFFOLD |
 | [spawn-profiler](crates/spawn-profiler/AGENTS.md) | Timing, counters, tracing/diagnostic instrumentation | SCAFFOLD |
+| `spawn-jobs` (no directory yet) | Work-stealing job system ([ADR-0012](docs/adr/0012-job-system.md)) | PLANNED |
 | [spawn-cli](tools/spawn-cli/AGENTS.md) | Command-line project/build/validate/asset tooling | SCAFFOLD |
 | [spawn-editor](tools/spawn-editor/AGENTS.md) | Graphical authoring tools | SCAFFOLD |
 | [spawn-mcp](tools/spawn-mcp/AGENTS.md) | MCP server for external AI agents/tools | SCAFFOLD |
@@ -108,7 +119,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 
 ## Data-Driven Design and Scripting Security
 
-**Data:** static configuration (characters, classes, movement profiles, weapon stats, ballistics, attachments, abilities, animation references) is declarative data, not Luau and not Rust constants. Luau implements behavior only. Format is undecided (`PLANNED`; decide once, record here). Definitions are versioned and validated at load with errors naming file, field, and reason. Hot reload is a goal for data and scripts. Do not build a pipeline before a concrete feature needs it.
+**Data:** static configuration (characters, classes, movement profiles, weapon stats, ballistics, attachments, abilities, animation references) is declarative data, not Luau and not Rust constants. Luau implements behavior only. Format: RON + `serde` for authored data, cooked binary at runtime ([ADR-0013](docs/adr/0013-declarative-data-format.md); `PLANNED`). Definitions are versioned and validated at load with errors naming file, field, and reason. Hot reload is a goal for data and scripts. Do not build a pipeline before a concrete feature needs it.
 
 **Scripting** (all `PLANNED`):
 - Allowlist-only API exposure, default deny; the boundary is law. Never expose raw Rust structures, pointers, ECS internals, or filesystem/OS/network access; never bypass the boundary for convenience. Missing API is added deliberately: documented, versioned, tested.
@@ -120,9 +131,9 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 
 ## Engineering Standards
 
-- Stable toolchain, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. No rustfmt/clippy config or CI exists yet (`PLANNED`).
+- Stable toolchain pinned, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. Toolchain file, workspace lints and pull-request CI are decided in [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md) and not yet applied (`PLANNED`).
 - `unsafe` only when needed (GPU/FFI/perf); each block has a `// SAFETY:` comment and, where feasible, a test.
-- No `unwrap()`/`expect()` on fallible runtime paths (assets, network, scripts); use typed errors; panic only on true invariant violations.
+- No `unwrap()`/`expect()`/`panic!`/`todo!` outside tests. Fallible functions return `Result` with typed errors carrying origin location, error code and cause chain ([ADR-0009](docs/adr/0009-error-handling-and-diagnostics.md)); foundation crates never panic on behalf of callers; panic only on true invariant violations.
 - Untrusted input (packets, mod scripts/data, asset files) must never cause panic, unbounded allocation, or UB.
 - Public APIs are small; default to `pub(crate)`. Document public items (`///`) and every script-exposed function (signature, semantics, errors, server/client availability, API version).
 - Build in observability when the first real system exists (structured logging, timing, counters, debug draw), owned by `spawn-profiler`; no speculative framework.
@@ -135,7 +146,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 - Check what exists; use the status tags correctly.
 - Keep infrastructure genre-agnostic; gameplay goes to frameworks/scripts.
 - Rust simulates, Luau decides, server is authoritative.
-- Justify every dependency and abstraction. Confirm undecided choices (windowing backend, data format, physics build-vs-integrate) with the user instead of assuming.
+- Justify every dependency and abstraction. Confirm undecided choices (rigid-body dynamics, anything covered only by a *Proposed* ADR) with the user instead of assuming.
 - No speculative frameworks (RPG/racing/etc.), no invented modules, no client authority over outcomes, no bypassing the Rust/Luau boundary.
 - When responsibilities are ambiguous or a nested document conflicts with this one, report it.
 
@@ -145,12 +156,33 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 - New crate/tool: add it to the [Subsystem Responsibility Map](#subsystem-responsibility-map) and create its `AGENTS.md` with the standard sections (Purpose, Responsibilities, Non-Responsibilities, Architectural Boundaries, Public API Guidelines, Internal Design Principles, Performance and Safety, Testing Requirements, Current Implementation Status, Agent Instructions).
 - Keep status text factual and non-temporal: describe what the source contains, not when or how long.
 - Nested files contain local rules only; global rules live here.
+- Accepting, superseding, or rejecting an ADR updates the [ADR index](docs/adr/README.md), the related [Open Architectural Questions](#open-architectural-questions) entry, and the affected crate `AGENTS.md` files in the same change.
+
+## Accepted Decisions
+
+Summaries only; the ADR is authoritative.
+
+- [ADR-0001](docs/adr/0001-in-house-platform-layer.md): in-house platform layer for Windows and Linux (Wayland and X11); macOS not supported; Spawn owns the event loop; thin binding crates (`windows-sys`, `wayland-client`, `x11rb`, `xkbcommon`).
+- [ADR-0002](docs/adr/0002-platform-owns-raw-input-events.md): `spawn-platform` owns raw event types, available without its native backend feature; `spawn-input` builds semantic input on top.
+- [ADR-0003](docs/adr/0003-fixed-step-loop-and-threading.md): `spawn-core` owns the fixed-step timing contract and `u64` tick index; the root binary drives the loop; `spawn-ecs` owns system scheduling; single-threaded foundation with a staged multi-threading target and recorded risks.
+- [ADR-0004](docs/adr/0004-in-house-graphics-api.md): in-house graphics API over Vulkan 1.3 inside `spawn-render` (`ash`, in-house allocator, Slang compiled offline to SPIR-V); `wgpu` and others are design references only.
+- [ADR-0005](docs/adr/0005-physics-strategy.md): in-house collision, spatial queries, kinematic character controller and lag-compensation query support in `spawn-physics`; deterministic movement math from `spawn-math`; rigid-body dynamics deferred to a benchmark-based evaluation (in-house Rust with Jolt as reference vs. Jolt vs. Rapier).
+- [ADR-0006](docs/adr/0006-in-house-audio.md): in-house audio output (WASAPI, PipeWire only), mixer, voice management, HDR-style mixing and HRTF; Steam Audio (Apache-2.0) only for expensive features such as propagation and reflections, each by its own ADR; no FMOD/Wwise.
+- [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md): pinned toolchain (Rust 1.99.1), strict workspace lints, `Result` for every fallible function, GitHub Actions on pull requests only plus a local check command.
+- [ADR-0008](docs/adr/0008-third-party-license-policy.md): no royalties or revenue-tied fees, ever; permissive open source anywhere; royalty-free proprietary SDKs (e.g. Steamworks) allowed only in optional integration crates or games, each by its own ADR; strong copyleft forbidden in shipped code; MPL-2.0 by owner approval; reference-code and AI-code rules; `cargo-deny`.
+- [ADR-0009](docs/adr/0009-error-handling-and-diagnostics.md): hand-written errors with origin location, error codes, cause chains and backtraces; `unwind` panics; crash reports and minidumps with archived symbols; own logging facade in `spawn-profiler`.
+- [ADR-0010](docs/adr/0010-math-library.md): in-house math; right-handed, Y-up, −Z forward; meters/seconds/kilograms; column-major; reversed-Z; `f64` absolute world positions with `f32` local data and camera-relative rendering; deterministic `f32`/`f64` subset only where needed; radians in code, degrees in data and Luau.
+- [ADR-0011](docs/adr/0011-ecs-architecture.md): in-house ECS; generational 64-bit entities; archetype tables with opt-in sparse sets; tick-based change detection; command buffers; deterministic, explicitly ordered scheduling; `bevy_ecs` rejected as a dependency, kept as primary reference.
+- [ADR-0015](docs/adr/0015-asset-pipeline.md): offline import/cook in `spawn-cli`; glTF 2.0 primary, FBX through ufbx (tooling only); PNG default, JPEG for photo albedo only, EXR/HDR for HDR; BCn cooked textures; UUID `.meta` identity; content-hash cooking cache.
+- [ADR-0019](docs/adr/0019-anti-cheat-and-client-trust.md): no kernel anti-cheat; untrusted client; server-side validation and information minimization; humans decide every penalty (AI only flags); disclosure in Terms of Service and Privacy Policy; evaluation tracks for user-mode anti-cheat, small AI models and integrity analysis.
+- [ADR-0012](docs/adr/0012-job-system.md): in-house work-stealing job system (tasks, no fibers, two priorities, single-threaded debug mode) in a planned foundation-level crate `spawn-jobs`; worker count configurable, default by benchmark.
+- [ADR-0013](docs/adr/0013-declarative-data-format.md): RON + `serde` for authored data, cooked binary at runtime; mandatory `version` field and migrations; unknown fields are errors; validation errors name file, field and reason.
+
+**Reference hardware** (minimum target; the owner's machine): AMD Ryzen 5 1600 (6 cores / 12 threads), AMD Radeon RX 460 (Polaris, RADV driver, Vulkan 1.4), Linux with PipeWire. Performance budgets are measured on it. It has no hardware ray tracing or mesh shaders, so features depending on them cannot be developed or verified on it.
 
 ## Open Architectural Questions
 
-1. Windowing/event backend (`winit` presumed, unconfirmed) and whether raw event types are owned by `spawn-platform` or `spawn-input` (see both documents).
-2. Declarative data format (RON/TOML/JSON) and versioning scheme.
-3. Physics: build vs. integrate an existing library.
-4. Dependency relationship between `spawn-scene` and `spawn-ecs` (does scene data reference ECS component types directly, or go through `spawn-reflect`?).
-5. Where fixed-timestep loop and system scheduling live: `spawn-core` (loop contract) vs. `spawn-ecs` (scheduler). Current documents split them; confirm.
-6. Whether `frameworks/`, `examples/`, and `tests/` (empty directories) become workspace members and their layout.
+Each remaining question has a proposed ADR awaiting owner review; see the [ADR index](docs/adr/README.md) for every proposed ADR.
+
+1. Dependency relationship between `spawn-scene` and `spawn-ecs`: proposed in [ADR-0021](docs/adr/0021-scene-ecs-relationship.md).
+2. Layout of `frameworks/`, `examples/`, `tests/`: proposed in [ADR-0022](docs/adr/0022-repository-layout.md).
