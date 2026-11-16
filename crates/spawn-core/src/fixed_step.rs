@@ -254,7 +254,10 @@ impl FixedStepClock {
     /// # Errors
     ///
     /// [`ClockErrorKind::TickIndexExhausted`] if executing the due ticks would
-    /// overflow the `u64` tick index. The clock is left unchanged.
+    /// overflow the `u64` tick index (the index after the last executed tick
+    /// must fit in `u64`, so the last executable tick is `u64::MAX - 1`). The
+    /// clock is left unchanged and `elapsed` is not accumulated; the index
+    /// never wraps.
     #[track_caller]
     pub fn advance(&mut self, elapsed: Duration) -> Result<FixedStepUpdate, ClockError> {
         let tick_nanos = self.config.tick_duration.as_nanos();
@@ -347,6 +350,76 @@ mod tests {
         assert_eq!(update.first_tick(), Tick::ZERO);
         assert_eq!(clock.pending(), Duration::ZERO);
         assert_eq!(clock.next_tick(), Tick::new(1));
+    }
+
+    #[test]
+    fn zero_elapsed_produces_no_ticks_and_changes_nothing() {
+        let mut clock = FixedStepClock::new(FixedStepConfig::default());
+        for _ in 0..10 {
+            let update = clock.advance(Duration::ZERO).unwrap();
+            assert_eq!(update.tick_count(), 0);
+            assert_eq!(update.ticks().count(), 0);
+            assert_eq!(update.dropped(), Duration::ZERO);
+        }
+        assert_eq!(clock.next_tick(), Tick::ZERO);
+        assert_eq!(clock.pending(), Duration::ZERO);
+    }
+
+    #[test]
+    fn exactly_one_tick_duration_executes_one_tick_with_no_remainder() {
+        let config = FixedStepConfig::default();
+        let mut clock = FixedStepClock::new(config);
+        let update = clock.advance(config.tick_duration()).unwrap();
+        assert_eq!(update.tick_count(), 1);
+        assert_eq!(update.first_tick(), Tick::ZERO);
+        assert_eq!(clock.pending(), Duration::ZERO);
+
+        // One nanosecond short of a tick does not execute it.
+        let update = clock
+            .advance(config.tick_duration() - Duration::from_nanos(1))
+            .unwrap();
+        assert_eq!(update.tick_count(), 0);
+        // The missing nanosecond completes it.
+        let update = clock.advance(Duration::from_nanos(1)).unwrap();
+        assert_eq!(update.tick_count(), 1);
+        assert_eq!(update.first_tick(), Tick::new(1));
+    }
+
+    #[test]
+    fn partial_durations_accumulate_exactly() {
+        let mut clock = FixedStepClock::new(FixedStepConfig::new(ms(10), 4).unwrap());
+        let mut executed = 0;
+        // 3 ms frames: ticks become due at 12, 21, 30 ms (cumulative 10, 20, 30).
+        for _ in 0..10 {
+            executed += clock.advance(ms(3)).unwrap().tick_count();
+        }
+        assert_eq!(executed, 3);
+        assert_eq!(clock.pending(), Duration::ZERO);
+        assert_eq!(clock.next_tick(), Tick::new(3));
+    }
+
+    #[test]
+    fn multiple_ticks_in_one_advance_keep_remainder() {
+        let mut clock = FixedStepClock::new(FixedStepConfig::new(ms(10), 4).unwrap());
+        let update = clock.advance(ms(37)).unwrap();
+        assert_eq!(update.tick_count(), 3);
+        assert_eq!(update.dropped(), Duration::ZERO);
+        assert_eq!(clock.pending(), ms(7));
+    }
+
+    #[test]
+    fn last_executable_tick_is_u64_max_minus_one() {
+        let config = FixedStepConfig::new(ms(10), 4).unwrap();
+        let mut clock = FixedStepClock::starting_at(config, Tick::new(u64::MAX - 1));
+        let update = clock.advance(ms(10)).unwrap();
+        assert_eq!(update.first_tick(), Tick::new(u64::MAX - 1));
+        assert_eq!(clock.next_tick(), Tick::new(u64::MAX));
+        // Time below one tick is still accepted at the end of the range.
+        assert_eq!(clock.advance(ms(5)).unwrap().tick_count(), 0);
+        // Any further tick would need index u64::MAX + 1.
+        let error = clock.advance(ms(5)).unwrap_err();
+        assert_eq!(error.kind(), ClockErrorKind::TickIndexExhausted);
+        assert_eq!(clock.pending(), ms(5));
     }
 
     #[test]

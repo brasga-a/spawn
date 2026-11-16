@@ -72,7 +72,21 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 | `CORE-0003` | `ZeroMaxTicksPerUpdate` | Max ticks per update is zero |
 | `CORE-0004` | `TickIndexExhausted` | Advancing would overflow the `u64` tick index |
 
-**Tests:** unit tests in `src/fixed_step.rs`; foundation verification in `tests/fixed_step_verification.rs` (FND-T01: identical sequences and render-cadence independence; FND-T02: bounded catch-up, dropped backlog, extreme values); one doc test.
+**Timing semantics:**
+
+- Time is integer nanoseconds (`Duration`), so there is no floating-point drift in accumulation. `from_tick_rate` truncates the tick to whole nanoseconds (60 Hz → 16 666 666 ns, i.e. ~0.04 ppm faster than exactly 60 Hz).
+- **Remainder policy:** after each `advance`, `pending()` is the sub-tick remainder (`< tick_duration`). When more ticks are due than `max_ticks_per_update`, only the limit runs; the whole ticks beyond it are dropped and returned in `dropped()`; the remainder is kept.
+- The configuration is fixed for the clock's lifetime (no setters).
+- The last executable tick is `u64::MAX - 1`; past that, `advance` returns `CORE-0004`, leaves the clock unchanged and never wraps.
+
+**Tests (all passing):** 14 unit tests in `src/fixed_step.rs` (config validation, zero elapsed, exact tick boundary, partial accumulation, multiple ticks per advance, iterator, last-index boundary, exhaustion, error report format, saturation); 6 verification tests in `tests/fixed_step_verification.rs` (FND-T01: identical sequences, render-cadence independence at 100/40/25 fps, 5 000 irregular frames with exact tick total and consecutive indices; FND-T02: 10 s pause bounded to 4 ticks with 9.96 s dropped and continuous indices, remainder kept after a drop, `Duration::MAX` repeatedly); 1 doc test. No GPU, window or OS clock involved.
+
+**Not implemented / deferred:**
+
+- Interpolation fraction: deferred until rendering interpolation needs it (foundation DESIGN); derivable as `pending() / tick_duration()`.
+- Subsystem lifecycle contracts: `PLANNED`, no consumer yet.
+- The main loop that reads monotonic time, runs ticks and reports `dropped()`: root binary, foundation Phase 5.
+- No claim of cross-platform deterministic gameplay: only the timing contract is deterministic for identical inputs and initial state.
 
 ## Agent Instructions
 
