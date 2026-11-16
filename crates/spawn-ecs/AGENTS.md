@@ -9,7 +9,7 @@ Owns the entity-component-system data model: entity identity, component storage,
 ## Responsibilities
 
 - Generational entity identifiers and entity lifecycle (spawn/despawn, liveness checks).
-- Component storage and archetype/table layout (PLANNED; layout decision is internal and not yet made).
+- Component storage and archetype/table layout (PLANNED; archetype tables with opt-in sparse sets per component type, [ADR-0011](../../docs/adr/0011-ecs-architecture.md)).
 - Queries, filters, change detection, and deferred command buffers.
 - System definition, access declaration (read/write sets), and scheduling/parallel execution (split with `spawn-core` accepted in [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md)).
 - Events/resources scoped to ECS data if a concrete feature requires them.
@@ -50,6 +50,12 @@ Owns the entity-component-system data model: entity identity, component storage,
 - Property/model-based tests comparing storage against a naive reference model.
 - Concurrency tests for the scheduler; benchmarks for iteration and structural change.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0011](../../docs/adr/0011-ecs-architecture.md) (ECS architecture), [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (fixed-step loop, tick index, threading), [ADR-0012](../../docs/adr/0012-job-system.md) (job system). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (scene/ECS relationship).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `smallvec`, `arrayvec`, `bitflags`, `rustc-hash`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No entity, component, query, or scheduler exists.
@@ -57,7 +63,5 @@ Owns the entity-component-system data model: entity identity, component storage,
 ## Agent Instructions
 
 - Do not define gameplay components or world/scene types here.
-- Do not choose storage layout or scheduler design without recording the rationale in this file.
+- Follow ADR-0011 for storage, change detection, command buffers and scheduling; deviations need an ADR update first.
 - Keep ECS usable without any renderer, physics, or scripting crate (headless).
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0021](../../docs/adr/0021-scene-ecs-relationship.md) (scene instantiation).
-- Accepted decisions governing this crate: [ADR-0011](../../docs/adr/0011-ecs-architecture.md) (ECS design).

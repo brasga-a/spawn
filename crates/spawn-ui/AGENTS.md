@@ -37,6 +37,11 @@ In-game UI runtime: layout, widgets, text, HUD infrastructure, UI input routing,
 
 - Headless layout tests; snapshot tests of draw lists; input-routing tests.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `cosmic-text`, `rustybuzz`, `ttf-parser`, `swash`, `unicode-segmentation`, `unicode-bidi`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No layout, widget, or HUD code exists.

@@ -42,6 +42,12 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 - Headless tests of event translation and queues with synthetic events; window creation tests are manual or opt-in (not required in CI).
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md) (platform layer), [ADR-0002](../../docs/adr/0002-platform-owns-raw-input-events.md) (raw event ownership), [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (fixed-step loop, tick index, threading). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0018](../../docs/adr/0018-gamepad-input.md) (gamepad input).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `windows-sys`, `wayland-client`, `wayland-protocols`, `x11rb`, `xkbcommon`, `raw-window-handle`, `rustix`, `evdev`, `udev`, `hidapi`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No window, event loop, or OS abstraction exists.
@@ -50,4 +56,3 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 - Do not add input mapping or action logic.
 - Do not select a windowing backend without user confirmation.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0018](../../docs/adr/0018-gamepad-input.md) (gamepad backends).

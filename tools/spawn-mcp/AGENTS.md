@@ -39,6 +39,11 @@ Model Context Protocol integration so external AI agents and development tools c
 
 - Protocol-level tests with a mock client; schema validation tests; negative tests for out-of-scope requests.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0008](../../docs/adr/0008-third-party-license-policy.md) (license policy). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `rmcp` (confirm maturity before adoption). Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No MCP server, tool definition, or protocol code exists.

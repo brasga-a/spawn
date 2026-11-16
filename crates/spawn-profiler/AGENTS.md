@@ -4,7 +4,7 @@ Local rules for `spawn-profiler` (crate). Global rules: [root AGENTS.md](../../A
 
 ## Purpose
 
-Observability infrastructure: frame and system timing, counters, structured spans/logging, and diagnostic output (a `tracing`-style approach is a candidate, unadopted).
+Observability infrastructure: frame and system timing, counters, structured spans/logging, and diagnostic output through an in-house logging/timing facade ([ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md)), forwarding to Tracy in development builds; `tracing` is a design reference only.
 
 ## Responsibilities
 
@@ -36,6 +36,12 @@ Observability infrastructure: frame and system timing, counters, structured span
 
 - Tests for aggregation correctness and disabled-mode no-op behavior; overhead benchmarks.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `tracy-client` (behind a feature). Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No timer, counter, or span exists.
@@ -44,4 +50,3 @@ Observability infrastructure: frame and system timing, counters, structured span
 
 - Build only when the first real system needs instrumentation ([root: Engineering Standards](../../AGENTS.md#engineering-standards)); no speculative framework.
 - Do not add gameplay-specific metrics.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (logging facade), [ADR-0020](../../docs/adr/0020-memory-strategy.md) (allocation tracking).

@@ -140,11 +140,14 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 - Build in observability when the first real system exists (structured logging, timing, counters, debug draw), owned by `spawn-profiler`; no speculative framework.
 - Small focused changes; no drive-by refactors or renames.
 
-**Testing:** add tests for critical behavior (ECS invariants, serialization round-trips, replication/reconciliation, sandbox escapes and limit enforcement, data validation, determinism where claimed). Keep logic headless-testable (no window/GPU) and isolate GPU/window code behind thin layers. Run `cargo test --workspace` before declaring work done; state explicitly anything not run or verified.
+**Testing:** add tests for critical behavior (ECS invariants, serialization round-trips, replication/reconciliation, sandbox escapes and limit enforcement, data validation, determinism where claimed). Approved test tools ([DEPENDENCIES](docs/DEPENDENCIES.md#testing-and-quality)): `proptest` (properties), `cargo-fuzz` + `arbitrary` (every untrusted-input parser), `loom` (lock-free and concurrency code), `insta` (snapshots, e.g. error reports), `criterion` or `divan` (benchmarks on the reference hardware), Miri (pure-Rust `unsafe`). Keep logic headless-testable (no window/GPU) and isolate GPU/window code behind thin layers. Run `scripts/check.sh` before declaring work done; state explicitly anything not run or verified.
 
 ## Agent Rules
 
 - Check what exists; use the status tags correctly.
+- Follow the [INVARIANTS](docs/architecture/INVARIANTS.md); pass the [GATES](docs/architecture/GATES.md) (G0 before every commit: `scripts/check.sh`).
+- Read the crate's `AGENTS.md` **Governing Decisions** before changing it; use only the third-party crates approved there and in [DEPENDENCIES](docs/DEPENDENCIES.md).
+- Work on a branch and merge through a pull request (CI runs only on pull requests); never commit directly to `master` unless the owner asks.
 - Keep infrastructure genre-agnostic; gameplay goes to frameworks/scripts.
 - Rust simulates, Luau decides, server is authoritative.
 - Justify every dependency and abstraction. Confirm undecided choices (rigid-body dynamics, anything covered only by a *Proposed* ADR) with the user instead of assuming.
@@ -154,7 +157,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 ## Documentation Maintenance
 
 - A change that adds a dependency edge, moves a responsibility, or changes a status tag updates the affected `AGENTS.md` files in the same change (root map, the crate's own file, and any crate whose boundary shifts).
-- New crate/tool: add it to the [Subsystem Responsibility Map](#subsystem-responsibility-map) and create its `AGENTS.md` with the standard sections (Purpose, Responsibilities, Non-Responsibilities, Architectural Boundaries, Public API Guidelines, Internal Design Principles, Performance and Safety, Testing Requirements, Current Implementation Status, Agent Instructions).
+- New crate/tool: add it to the [Subsystem Responsibility Map](#subsystem-responsibility-map) and create its `AGENTS.md` with the standard sections (Purpose, Responsibilities, Non-Responsibilities, Architectural Boundaries, Public API Guidelines, Internal Design Principles, Performance and Safety, Testing Requirements, Governing Decisions, Current Implementation Status, Agent Instructions). **Governing Decisions** lists the accepted and proposed ADRs for the crate and its approved third-party crates; keep it in sync with the ADR index and [DEPENDENCIES](docs/DEPENDENCIES.md).
 - Keep status text factual and non-temporal: describe what the source contains, not when or how long.
 - Nested files contain local rules only; global rules live here.
 - Accepting, superseding, or rejecting an ADR updates the [ADR index](docs/adr/README.md), the [decision register](docs/architecture/DECISIONS.md), [INVARIANTS](docs/architecture/INVARIANTS.md) and [GATES](docs/architecture/GATES.md) where a rule changes, the related [Open Architectural Questions](#open-architectural-questions) entry, and the affected crate `AGENTS.md` files in the same change.
@@ -174,16 +177,16 @@ Summaries only; the ADR is authoritative.
 - [ADR-0009](docs/adr/0009-error-handling-and-diagnostics.md): hand-written errors with origin location, error codes, cause chains and backtraces; `unwind` panics; crash reports and minidumps with archived symbols; own logging facade in `spawn-profiler`.
 - [ADR-0010](docs/adr/0010-math-library.md): in-house math; right-handed, Y-up, −Z forward; meters/seconds/kilograms; column-major; reversed-Z; `f64` absolute world positions with `f32` local data and camera-relative rendering; deterministic `f32`/`f64` subset only where needed; radians in code, degrees in data and Luau.
 - [ADR-0011](docs/adr/0011-ecs-architecture.md): in-house ECS; generational 64-bit entities; archetype tables with opt-in sparse sets; tick-based change detection; command buffers; deterministic, explicitly ordered scheduling; `bevy_ecs` rejected as a dependency, kept as primary reference.
-- [ADR-0015](docs/adr/0015-asset-pipeline.md): offline import/cook in `spawn-cli`; glTF 2.0 primary, FBX through ufbx (tooling only); PNG default, JPEG for photo albedo only, EXR/HDR for HDR; BCn cooked textures; UUID `.meta` identity; content-hash cooking cache.
-- [ADR-0019](docs/adr/0019-anti-cheat-and-client-trust.md): no kernel anti-cheat; untrusted client; server-side validation and information minimization; humans decide every penalty (AI only flags); disclosure in Terms of Service and Privacy Policy; evaluation tracks for user-mode anti-cheat, small AI models and integrity analysis.
 - [ADR-0012](docs/adr/0012-job-system.md): in-house work-stealing job system (tasks, no fibers, two priorities, single-threaded debug mode) in a planned foundation-level crate `spawn-jobs`; worker count configurable, default by benchmark.
 - [ADR-0013](docs/adr/0013-declarative-data-format.md): RON + `serde` for authored data, cooked binary at runtime; mandatory `version` field and migrations; unknown fields are errors; validation errors name file, field and reason.
+- [ADR-0015](docs/adr/0015-asset-pipeline.md): offline import/cook in `spawn-cli`; glTF 2.0 primary, FBX through ufbx (tooling only); PNG default, JPEG for photo albedo only, EXR/HDR for HDR; BCn cooked textures; UUID `.meta` identity; content-hash cooking cache.
+- [ADR-0019](docs/adr/0019-anti-cheat-and-client-trust.md): no kernel anti-cheat; untrusted client; server-side validation and information minimization; humans decide every penalty (AI only flags); disclosure in Terms of Service and Privacy Policy; evaluation tracks for user-mode anti-cheat, small AI models and integrity analysis.
 
 **Reference hardware** (minimum target; the owner's machine): AMD Ryzen 5 1600 (6 cores / 12 threads), AMD Radeon RX 460 (Polaris, RADV driver, Vulkan 1.4), Linux with PipeWire. Performance budgets are measured on it. It has no hardware ray tracing or mesh shaders, so features depending on them cannot be developed or verified on it.
 
 ## Open Architectural Questions
 
-Each remaining question has a proposed ADR awaiting owner review; see the [ADR index](docs/adr/README.md) for every proposed ADR.
+Each remaining question has a proposed ADR awaiting owner review; see the [ADR index](docs/adr/README.md) and the [decision register](docs/architecture/DECISIONS.md#pending-decisions) for every pending item.
 
 1. Dependency relationship between `spawn-scene` and `spawn-ecs`: proposed in [ADR-0021](docs/adr/0021-scene-ecs-relationship.md).
 2. Layout of `frameworks/`, `examples/`, `tests/`: proposed in [ADR-0022](docs/adr/0022-repository-layout.md).

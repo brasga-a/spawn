@@ -45,6 +45,12 @@ Asset management: stable asset identity, loading, caching, dependency tracking, 
 - Headless tests with in-memory sources: dedup, dependency order, failure propagation, reload.
 - Concurrency tests for async loads; fuzzing of loader inputs.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (asset pipeline), [ADR-0013](../../docs/adr/0013-declarative-data-format.md) (data format), [ADR-0012](../../docs/adr/0012-job-system.md) (job system). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy), [ADR-0024](../../docs/adr/0024-packages-and-game-extensions.md) (packages and extensions).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `uuid`, `blake3`, `lz4_flex`, `bytemuck`, `zstd` or ruzstd, `serde`, `ron`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No asset type or loader exists.
@@ -53,5 +59,3 @@ Asset management: stable asset identity, loading, caching, dependency tracking, 
 
 - Do not implement format-specific decoding for other subsystems here.
 - Reuse `spawn-io` for access; do not call `std::fs` directly in this crate once `spawn-io` exists.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0020](../../docs/adr/0020-memory-strategy.md) (budgets).
-- Accepted decisions governing this crate: [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (identity, cooking, loading).
