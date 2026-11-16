@@ -9,7 +9,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 ## Responsibilities
 
 - Subsystem lifecycle contracts and engine-level orchestration vocabulary (PLANNED).
-- Fixed-timestep loop contract separating simulation ticks from presentation frames (see [root: ECS and System Design](../../AGENTS.md#ecs-and-system-design)). Scheduling of ECS systems stays in `spawn-ecs` (accepted in [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md); driving the loop belongs to the root composition binary).
+- Fixed-timestep loop contract separating simulation ticks from presentation frames (`EXISTS`: `FixedStepClock`; see [root: ECS and System Design](../../AGENTS.md#ecs-and-system-design)). Scheduling of ECS systems stays in `spawn-ecs` (accepted in [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md); driving the loop belongs to the root composition binary).
 - Shared error and identifier conventions only when two or more crates demonstrably need the same definition.
 
 ## Non-Responsibilities
@@ -53,9 +53,30 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 
 ## Current Implementation Status
 
-`SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No lifecycle contract, loop, or shared type exists.
+`EXISTS` (fixed-step clock only; lifecycle contracts are `PLANNED`). No dependencies; inherits workspace metadata and lints.
+
+| Item | Module | Notes |
+| --- | --- | --- |
+| `Tick` | `fixed_step` | `u64` tick index newtype; monotonic, never reset (ADR-0003) |
+| `FixedStepConfig` | `fixed_step` | Tick duration + max ticks per update; `Default` = 60 Hz, 4 ticks; validated constructors (`new`, `from_tick_rate`) |
+| `FixedStepClock` | `fixed_step` | `advance(elapsed)` with injected monotonic time; never reads OS time; drops whole ticks beyond the limit, keeps the sub-tick remainder; overflow-safe for any `Duration` |
+| `FixedStepUpdate`, `Ticks` | `fixed_step` | Ticks to run (iterator, no allocation) and dropped backlog for the caller's diagnostic |
+| `ClockError`, `ClockErrorKind` | `error` | Located (`#[track_caller]`), coded, compiler-like `Display`, optional backtrace (ADR-0009) |
+
+**Error codes:**
+
+| Code | Kind | Meaning |
+| --- | --- | --- |
+| `CORE-0001` | `ZeroTickDuration` | Tick duration is zero |
+| `CORE-0002` | `ZeroTickRate` | Tick rate is zero |
+| `CORE-0003` | `ZeroMaxTicksPerUpdate` | Max ticks per update is zero |
+| `CORE-0004` | `TickIndexExhausted` | Advancing would overflow the `u64` tick index |
+
+**Tests:** unit tests in `src/fixed_step.rs`; foundation verification in `tests/fixed_step_verification.rs` (FND-T01: identical sequences and render-cadence independence; FND-T02: bounded catch-up, dropped backlog, extreme values); one doc test.
 
 ## Agent Instructions
 
 - Before adding anything here, check whether `spawn-math`, `spawn-io`, `spawn-profiler`, or `spawn-ecs` owns it.
 - Do not add dependencies on any `spawn-*` crate.
+- The clock must stay free of OS time, logging and allocation; the root binary measures time and reports dropped backlog.
+- New error kinds get the next `CORE-` code; codes are never reused or renumbered.

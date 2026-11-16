@@ -53,9 +53,9 @@ Rules that must never be violated anywhere in Spawn. Each invariant has a stable
 
 | ID | Invariant | Source | Verify |
 | --- | --- | --- | --- |
-| SPN-INV-040 | Simulation advances only in fixed steps from monotonic time, never by render-frame delta. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test |
-| SPN-INV-041 | A single wakeup runs at most the configured catch-up ticks; excess backlog is dropped and reported. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test |
-| SPN-INV-042 | The tick index is a `u64` owned by `spawn-core`, incremented once per executed tick, never reset by resize, recovery or dropped backlog. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test |
+| SPN-INV-040 | Simulation advances only in fixed steps from monotonic time, never by render-frame delta. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test (`spawn-core`: FND-T01/T02) |
+| SPN-INV-041 | A single wakeup runs at most the configured catch-up ticks; excess backlog is dropped and reported. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test (`spawn-core`: FND-T01/T02) |
+| SPN-INV-042 | The tick index is a `u64` owned by `spawn-core`, incremented once per executed tick, never reset by resize, recovery or dropped backlog. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | test (`spawn-core`: FND-T01/T02) |
 | SPN-INV-043 | Simulation state is separate from presentation state; rendering never mutates simulation state. | Root [ECS](../../AGENTS.md#ecs-and-system-design), [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md) | review |
 | SPN-INV-044 | Code used in prediction/reconciliation produces identical results on Windows and Linux for the same inputs, using only the deterministic subset of `spawn-math`. | [ADR-0005](../adr/0005-physics-strategy.md), [ADR-0010](../adr/0010-math-library.md) | test (cross-platform comparison) |
 | SPN-INV-045 | Parallel execution never changes the result of simulation systems used in prediction: results are combined in a fixed order, never completion order. | [ADR-0003](../adr/0003-fixed-step-loop-and-threading.md), [ADR-0011](../adr/0011-ecs-architecture.md), [ADR-0012](../adr/0012-job-system.md) | test |

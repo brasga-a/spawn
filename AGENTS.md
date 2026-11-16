@@ -79,7 +79,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 
 | Crate | Owns (one line) | Status |
 |---|---|---|
-| [spawn-core](crates/spawn-core/AGENTS.md) | Lifecycle/orchestration contracts shared by subsystems; fixed-timestep loop contract | SCAFFOLD |
+| [spawn-core](crates/spawn-core/AGENTS.md) | Lifecycle/orchestration contracts shared by subsystems; fixed-timestep loop contract | EXISTS (fixed-step clock); rest PLANNED |
 | [spawn-math](crates/spawn-math/AGENTS.md) | Vector/matrix/quaternion/geometry primitives | SCAFFOLD |
 | [spawn-ecs](crates/spawn-ecs/AGENTS.md) | Entity identity, component storage, queries, system scheduling | SCAFFOLD |
 | [spawn-world](crates/spawn-world/AGENTS.md) | Runtime worlds: lifecycle, activation, load/unload, streaming | SCAFFOLD |
@@ -102,7 +102,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-editor](tools/spawn-editor/AGENTS.md) | Graphical authoring tools | SCAFFOLD |
 | [spawn-mcp](tools/spawn-mcp/AGENTS.md) | MCP server for external AI agents/tools | SCAFFOLD |
 
-Verified scaffold state: every `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
+Verified state: `spawn-core` contains the fixed-step clock (`FixedStepClock`, `FixedStepConfig`, `FixedStepUpdate`, `Tick`, `ClockError`) with unit, verification (FND-T01, FND-T02) and doc tests; every other `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
 
 Ownership rule: each piece of state has exactly one owning system; others use its API. If a responsibility seems to fit two crates, stop and report rather than duplicate it.
 

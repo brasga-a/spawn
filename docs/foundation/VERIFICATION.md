@@ -1,6 +1,6 @@
 # Verification and Acceptance — Foundation
 
-**Status:** test plan only. No foundation test results have been run or claimed here.
+**Status:** test plan. Implemented and passing: FND-T01, FND-T02 (`crates/spawn-core/tests/fixed_step_verification.rs`). All other cases are not yet implemented.
 
 ## Required automated checks
 
