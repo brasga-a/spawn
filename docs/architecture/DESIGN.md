@@ -54,7 +54,7 @@ No dependency edge exists yet. The intended edges below follow the ADRs and [INV
 
 ### 3.1 Main loop (ADR-0003)
 
-The root binary owns a poll-driven loop:
+The root binary owns a poll-driven loop. The timing part exists in `spawn-core` (`FixedStepClock`); the loop itself is `PLANNED`:
 
 ```text
 loop {
