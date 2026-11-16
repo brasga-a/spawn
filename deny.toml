@@ -24,6 +24,8 @@ allow = [
     "Unicode-DFS-2016",
 ]
 confidence-threshold = 0.9
+# The allowlist is policy, not a list of licenses currently in use.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
