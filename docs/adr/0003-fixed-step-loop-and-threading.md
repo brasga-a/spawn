@@ -44,7 +44,7 @@ On Windows, live resize and window dragging block the thread inside the OS modal
 | Step | Change | Owner crate | Motivation |
 | --- | --- | --- | --- |
 | 1 | Window/input thread: pumps OS events and sends timestamped raw events to the game thread through a bounded queue | `spawn-platform` | Continuous, precisely timestamped mouse input; game loop keeps running during Windows modal resize/drag |
-| 2 | Job system: worker pool sized to the CPU; ECS systems without conflicting data access run in parallel | `spawn-ecs` | Use all cores for large battles (physics, animation, AI) |
+| 2 | Job system: worker pool sized to the CPU; ECS systems without conflicting data access run in parallel | `spawn-jobs` (pool, [ADR-0012](0012-job-system.md)), `spawn-ecs` (scheduler) | Use all cores for large battles (physics, animation, AI) |
 | 3 | Render thread: simulation prepares frame N while the render thread submits frame N-1, with late latching of camera/input | `spawn-render` | GPU stalls no longer delay simulation ticks |
 | — | Real-time audio thread (already required by `spawn-audio`) | `spawn-audio` | Glitch-free audio |
 

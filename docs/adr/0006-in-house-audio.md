@@ -17,7 +17,7 @@ The owner requires **no royalties** ([ADR-0008](0008-third-party-license-policy.
    - Linux: **PipeWire only**, through thin bindings. No PulseAudio or ALSA fallback; systems older than the owner's reference hardware and software are not targeted.
    - A null backend for headless tests.
 2. **Mixer, buses, effects, and voice management, in-house:** priorities, voice limits, virtualization of inaudible voices, and HDR-style dynamic mixing.
-3. **Decoding, integrated:** a pure-Rust decoder (`symphonia`) or Opus through `libopus`; chosen when the first audio asset format is defined. Writing codecs is out of scope.
+3. **Decoding, integrated:** Opus through `opus` (libopus, BSD-3) and Vorbis through `lewton` (pure Rust), approved in [DEPENDENCIES](../DEPENDENCIES.md); `symphonia` was rejected by the owner (MPL-2.0). Writing codecs is out of scope.
 4. **No middleware:** FMOD and Wwise are excluded (license fees tied to revenue or budget in their commercial tiers). Sound events are declarative data (root [Data-Driven Design](../../AGENTS.md#data-driven-design-and-scripting-security)); a visual authoring tool is future `spawn-editor` work.
 5. **Occlusion boundary:** `spawn-audio` never depends on `spawn-physics`. Occlusion and obstruction values are computed by higher layers (e.g. the FPS framework with physics raycasts) and passed to `spawn-audio` per voice.
 

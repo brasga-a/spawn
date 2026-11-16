@@ -12,12 +12,13 @@ Authoritative architectural reference for coding agents. Nested `AGENTS.md` file
 
 Never invent crates, modules, dependencies, or APIs. Verify against the tree and `Cargo.toml` files before asserting anything exists.
 
-**Document precedence.** Engineering documentation lives in [`docs/`](docs/README.md): milestone specifications in [`docs/foundation/`](docs/foundation/README.md) and decision records in [`docs/adr/`](docs/adr/README.md). When documents conflict:
+**Document precedence.** Engineering documentation lives in [`docs/`](docs/README.md): engine-wide [invariants](docs/architecture/INVARIANTS.md), [design](docs/architecture/DESIGN.md), [quality gates](docs/architecture/GATES.md) and [decision register](docs/architecture/DECISIONS.md) in `docs/architecture/`; milestone specifications in [`docs/foundation/`](docs/foundation/README.md); decision records in [`docs/adr/`](docs/adr/README.md); approved crates in [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md). When documents conflict:
 
 1. This file governs global rules, layering, and ownership.
-2. A crate/tool `AGENTS.md` governs local rules within those limits.
-3. `docs/foundation/` defines milestone requirements and must stay within the rules above.
-4. ADRs record rationale. A *Proposed* ADR authorizes nothing; an *Accepted* ADR is synchronized into the affected `AGENTS.md` files in the same change.
+2. [INVARIANTS](docs/architecture/INVARIANTS.md) are binding engine-wide rules derived from accepted ADRs; every change passes the [GATES](docs/architecture/GATES.md).
+3. A crate/tool `AGENTS.md` governs local rules within those limits.
+4. `docs/foundation/` defines milestone requirements and must stay within the rules above.
+5. ADRs record rationale. A *Proposed* ADR authorizes nothing; an *Accepted* ADR is synchronized into the affected `AGENTS.md` files in the same change.
 
 Code and manifests are the only evidence of what is implemented. A conflict between documents is reported and fixed in the change that finds it, never resolved silently.
 
@@ -64,7 +65,7 @@ Conventions:
 - Add a dependency edge only when real code needs it; lower layers must not depend on higher ones.
 - Minimal dependencies per crate: every crate must build and test with the fewest `spawn-*` and external dependencies possible. Native or heavy backends sit behind Cargo features so consumers that only need a crate's types (headless tests, dedicated servers) do not link them. This isolates compilation and error attribution; runtime containment still relies on typed errors instead of panics.
 - Do not assume every crate depends on `spawn-core`. Prefer small shared contracts and dependency inversion (the higher layer implements a trait/contract owned by the lower one) over upward references.
-- Third-party deps: state what, why not std/hand-written, maintenance health, compile-time cost, licence; declare in `[workspace.dependencies]` with `default-features = false` where possible. Accepted by ADR but not yet added: `windows-sys`, `wayland-client`, `wayland-protocols`, `x11rb`, `xkbcommon`, `raw-window-handle`, `ash` (see [Accepted Decisions](#accepted-decisions)). Candidates (unadopted; verify first): `mlua`, `glam`, an audio decoder (`symphonia` or `libopus`, per ADR-0006), `tracing`, `egui` (editor only). No physics library until the dynamics evaluation of ADR-0005. No royalty-bearing or revenue-tied dependency (e.g. FMOD, Wwise, Havok); royalty-free proprietary SDKs (e.g. Steamworks) only in optional integration crates ([ADR-0008](docs/adr/0008-third-party-license-policy.md)).
+- Third-party deps: state what, why not std/hand-written, maintenance health, compile-time cost, licence; declare in `[workspace.dependencies]` with `default-features = false` where possible. **Approved dependencies** (owner-approved, added only when code needs them; `symphonia` rejected) are listed with license, kind and allowed crates in [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md); a crate not listed there needs owner approval first. No physics library until the dynamics evaluation of ADR-0005. No royalty-bearing or revenue-tied dependency (e.g. FMOD, Wwise, Havok); royalty-free proprietary SDKs (e.g. Steamworks) only in optional integration crates ([ADR-0008](docs/adr/0008-third-party-license-policy.md)).
 - Workspace membership (`.`, `crates/*`, `tools/*`) matches the directories on disk: the root package, 18 packages under `crates/`, and 3 under `tools/`. Each has an `AGENTS.md` (map below); packages outside those globs are not part of the workspace.
 
 ## Subsystem Responsibility Map
@@ -156,7 +157,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 - New crate/tool: add it to the [Subsystem Responsibility Map](#subsystem-responsibility-map) and create its `AGENTS.md` with the standard sections (Purpose, Responsibilities, Non-Responsibilities, Architectural Boundaries, Public API Guidelines, Internal Design Principles, Performance and Safety, Testing Requirements, Current Implementation Status, Agent Instructions).
 - Keep status text factual and non-temporal: describe what the source contains, not when or how long.
 - Nested files contain local rules only; global rules live here.
-- Accepting, superseding, or rejecting an ADR updates the [ADR index](docs/adr/README.md), the related [Open Architectural Questions](#open-architectural-questions) entry, and the affected crate `AGENTS.md` files in the same change.
+- Accepting, superseding, or rejecting an ADR updates the [ADR index](docs/adr/README.md), the [decision register](docs/architecture/DECISIONS.md), [INVARIANTS](docs/architecture/INVARIANTS.md) and [GATES](docs/architecture/GATES.md) where a rule changes, the related [Open Architectural Questions](#open-architectural-questions) entry, and the affected crate `AGENTS.md` files in the same change.
 
 ## Accepted Decisions
 

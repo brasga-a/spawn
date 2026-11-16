@@ -15,7 +15,7 @@ Meshes, skeletons, animations, textures, materials, audio and definitions must b
    - **Load (runtime, `spawn-assets`):** cooked assets only in shipping builds; development builds may cook on demand for hot reload.
 2. **Source formats:**
    - **3D: glTF 2.0 (primary) and FBX (secondary).**
-     - **glTF 2.0** (`.gltf`/`.glb`): the reference format, parsed by an in-house importer. Preferred for all content Spawn's own pipeline produces; Blender exports it natively.
+     - **glTF 2.0** (`.gltf`/`.glb`): the reference format, parsed with the `gltf` crate under an in-house importer that converts to Spawn's representation. Preferred for all content Spawn's own pipeline produces; Blender exports it natively.
      - **FBX** through **ufbx** (single-file C library, MIT), used **only inside `spawn-cli`** (development tooling; never linked into games or servers). It gives access to FBX-based content: animation libraries such as Mixamo, asset stores, and Maya/3ds Max pipelines. Bindings are either thin in-house FFI or an existing binding crate, chosen at implementation under [ADR-0008](0008-third-party-license-policy.md). Both importers produce the same internal representation, so cooked assets do not depend on the source format.
      - The Autodesk FBX SDK is not used: ufbx covers the need, and the SDK's terms restrict redistribution with an MIT-licensed, publicly distributed tool.
    - **Textures: three source formats, each with a role.** All are **cooked to GPU block-compressed formats** (BC7 for color, BC5 for normals, BC4 for single-channel, BC6H for HDR) with mipmaps; the runtime never reads PNG, JPEG or EXR.

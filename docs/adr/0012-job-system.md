@@ -11,7 +11,7 @@ Large battles require using every core for physics, animation, AI and ECS system
 ## Decision
 
 1. **In-house work-stealing job system.** The worker count is **configurable**; the default is chosen by benchmark on the reference hardware (6 physical cores / 12 logical threads), comparing one worker per physical core against one per logical thread, minus the dedicated threads (main/game, window/input, audio, render when introduced).
-2. **Tasks, not fibers.** Jobs are closures or task objects scheduled on per-worker deques with stealing (Chase-Lev style). Fibers (stack switching) are not used: they need platform-specific `unsafe` code and interact badly with Rust's borrow and thread-local model.
+2. **Tasks, not fibers.** Jobs are closures or task objects scheduled on per-worker deques with stealing (Chase-Lev), using `crossbeam-deque` (approved in [DEPENDENCIES](../DEPENDENCIES.md)); scheduling logic, priorities and waiting are Spawn's own. Fibers (stack switching) are not used: they need platform-specific `unsafe` code and interact badly with Rust's borrow and thread-local model.
 3. **Waiting without blocking:** a thread waiting for a job group runs other jobs instead of sleeping (helping), avoiding deadlock from blocked workers.
 4. **Priorities:** at least two queues: frame-critical (simulation, rendering preparation) and background (asset loading, decompression, streaming). Background work never delays frame-critical work.
 5. **Placement: a dedicated crate, `spawn-jobs`** (approved by the owner; `PLANNED`, created with the first implementation). It is foundation-level: it depends on no other `spawn-*` crate (not ECS, not profiler, not core), so games that do not use parallel jobs do not compile it. The ECS scheduler and other systems depend on it.
@@ -38,7 +38,7 @@ Large battles require using every core for physics, animation, AI and ECS system
 
 ## Risks
 
-- **Lock-free deque bugs** (memory ordering). Mitigation: port from a well-tested design with notice (ADR-0008), loom-style model tests where feasible, Miri.
+- **Lock-free deque bugs** (memory ordering). Mitigation: the deques come from `crossbeam-deque`; Spawn's own synchronization is tested with `loom` and Miri.
 - **Oversubscription** with OS and driver threads. Mitigation: measured worker count, configurable.
 - **Jobs too small** cost more than they save. Mitigation: profiler data; minimum batch sizes.
 

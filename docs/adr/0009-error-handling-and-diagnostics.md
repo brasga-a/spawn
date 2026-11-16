@@ -45,7 +45,8 @@ Root rules require typed errors and no panics on fallible runtime paths, but do 
 
 9. **Own minimal logging facade in `spawn-profiler`**: levels (error, warn, info, debug, trace), a target (crate/subsystem), and structured key-value fields. Compiled-out levels in release builds have zero cost. Output: stderr in development; file output added when needed.
 10. Until `spawn-profiler` provides the facade, the foundation uses stderr through `std` only, as already decided in DESIGN.
-11. `tracing` is a design reference, not a dependency. If a future tool integration requires it, an adapter from the facade is added rather than replacing it.
+11. In development builds, timing scopes and logs can be forwarded to the **Tracy** profiler (`tracy-client`, behind a feature, approved in [DEPENDENCIES](../DEPENDENCIES.md)).
+12. `tracing` is a design reference, not a dependency. If a future tool integration requires it, an adapter from the facade is added rather than replacing it.
 
 ## Alternatives
 
