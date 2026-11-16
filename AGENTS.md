@@ -26,14 +26,14 @@ Code and manifests are the only evidence of what is implemented. A conflict betw
 
 ## Vision
 
-Spawn is a modular, high-performance, **general-purpose** game engine: Rust core, embedded Luau for gameplay. The validation project is a multiplayer FPS (inspired by Black Ops II, Battlefield 4, Hardline): large-scale combat, responsive movement, weapons, vehicles, classes, advanced animation and physics, extensible gameplay. FPS is the first use case, not a limitation; RPG, racing, simulation, strategy, and platformers must remain feasible.
+Spawn is a modular, high-performance, **general-purpose** game engine written in Rust. Games can be written **entirely in Rust**; embedded Luau is an **optional** layer for scripting, rapid iteration and modding. The validation project is a multiplayer FPS (inspired by Black Ops II, Battlefield 4, Hardline): large-scale combat, responsive movement, weapons, vehicles, classes, advanced animation and physics, extensible gameplay. FPS is the first use case, not a limitation; RPG, racing, simulation, strategy, and platformers must remain feasible.
 
 Priorities: performance, modularity, maintainability, extensibility. Generality comes from **proven requirements**, not speculation: extract to infrastructure only when a genre-independent need is demonstrated.
 
 ## Layers and Boundaries
 
 ```
-Game Projects        game-specific rules, content, configs, scripts
+Game Projects        game-specific rules (Rust and/or Luau), content, configs
 Gameplay Frameworks  optional, genre-specific (FPS first)
 Engine Infrastructure generic systems; no genre knowledge
 ```
@@ -48,11 +48,16 @@ Dependencies point **down only**, are explicit, and acyclic.
 
 ## Rust and Luau
 
-**Rust owns** infrastructure and orchestration, rendering/GPU, ECS and simulation, physics, animation, audio, networking/replication, input and platform integration, asset management, and anything performance-critical or that scales with entity count per tick.
+**Rust is a first-class gameplay language.** Rust covers engine infrastructure and orchestration, rendering/GPU, ECS and simulation, physics, animation, audio, networking/replication, input and platform integration, asset management, performance-critical code — **and** gameplay systems, mechanics, game-specific logic, frameworks and compile-time extensions. A game may be written entirely in Rust.
 
-**Luau owns** gameplay behavior: character/weapon behavior and rules, abilities, game modes, gameplay events, AI behavior orchestration, modding.
+**Luau is optional.** When a game uses it, Luau provides gameplay scripting, rapid iteration, dynamic rules and behaviors, AI behavior orchestration, modding and runtime extension through controlled, sandboxed APIs.
 
-Luau is invoked on **events and decisions**, never as the simulation loop: no per-entity per-tick hot loops, physics math, hit registration, bulk projectile processing, or pathfinding inner loops in Luau.
+Rules:
+- Games must be able to use Rust exclusively; no engine crate or framework requires Luau or `spawn-scripting`.
+- Component registration, system execution and game initialization are Rust APIs; Luau is never required for them. `spawn-scripting` is an optional consumer of the same engine contracts.
+- When both are used, Rust gameplay systems and Luau scripts interact only through defined engine contracts (events, commands, registered APIs); neither reaches into the other's internals.
+- Authority and security are language-independent: the server is authoritative whether gameplay is in Rust or Luau, and all Luau security rules below still apply.
+- Luau is invoked on **events and decisions**, never as the simulation loop: no per-entity per-tick hot loops, physics math, hit registration, bulk projectile processing, or pathfinding inner loops in Luau. Code with those characteristics is Rust.
 
 Integration layer: `mlua` with the `luau` feature (`PLANNED`; not a dependency). Before adding it, verify current mlua docs for supported Luau features; pin it in `[workspace.dependencies]`. All `mlua` usage is confined to `spawn-scripting`; no other crate may import `mlua` types. Prefer a command/event queue across the boundary, applied by Rust at defined sync points.
 
@@ -120,7 +125,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 
 ## Data-Driven Design and Scripting Security
 
-**Data:** static configuration (characters, classes, movement profiles, weapon stats, ballistics, attachments, abilities, animation references) is declarative data, not Luau and not Rust constants. Luau implements behavior only. Format: RON + `serde` for authored data, cooked binary at runtime ([ADR-0013](docs/adr/0013-declarative-data-format.md); `PLANNED`). Definitions are versioned and validated at load with errors naming file, field, and reason. Hot reload is a goal for data and scripts. Do not build a pipeline before a concrete feature needs it.
+**Data:** static configuration (characters, classes, movement profiles, weapon stats, ballistics, attachments, abilities, animation references) is declarative data, not code (neither Luau nor Rust constants). Behavior is implemented in Rust or, optionally, Luau. Format: RON + `serde` for authored data, cooked binary at runtime ([ADR-0013](docs/adr/0013-declarative-data-format.md); `PLANNED`). Definitions are versioned and validated at load with errors naming file, field, and reason. Hot reload is a goal for data and scripts. Do not build a pipeline before a concrete feature needs it.
 
 **Scripting** (all `PLANNED`):
 - Allowlist-only API exposure, default deny; the boundary is law. Never expose raw Rust structures, pointers, ECS internals, or filesystem/OS/network access; never bypass the boundary for convenience. Missing API is added deliberately: documented, versioned, tested.
@@ -132,7 +137,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 
 ## Engineering Standards
 
-- Stable toolchain pinned, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. Applied from [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md) (`EXISTS`): `rust-toolchain.toml`, `[workspace.lints]` + `clippy.toml`, `.github/workflows/ci.yml` (pull requests), `deny.toml`, and the local check command **`scripts/check.sh`** (run it before every push). Without `rustup` (e.g. distribution-packaged Rust), `rust-toolchain.toml` is ignored locally; use the pinned version.
+- Stable toolchain pinned, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. Applied from [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md) (`EXISTS`): `rust-toolchain.toml`, `[workspace.lints]` + `clippy.toml`, `.github/workflows/ci.yml` (pull requests), `deny.toml`, and the local check command **`scripts/check.sh`** (run it before every push; it fails when a mandatory check cannot run). Without `rustup` (e.g. distribution-packaged Rust), `rust-toolchain.toml` is ignored locally; use the pinned version.
 - `unsafe` only when needed (GPU/FFI/perf); each block has a `// SAFETY:` comment and, where feasible, a test.
 - No `unwrap()`/`expect()`/`panic!`/`todo!` outside tests. Fallible functions return `Result` with typed errors carrying origin location, error code and cause chain ([ADR-0009](docs/adr/0009-error-handling-and-diagnostics.md)); foundation crates never panic on behalf of callers; panic only on true invariant violations.
 - Untrusted input (packets, mod scripts/data, asset files) must never cause panic, unbounded allocation, or UB.
@@ -148,8 +153,8 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 - Follow the [INVARIANTS](docs/architecture/INVARIANTS.md); pass the [GATES](docs/architecture/GATES.md) (G0 before every commit: `scripts/check.sh`).
 - Read the crate's `AGENTS.md` **Governing Decisions** before changing it; use only the third-party crates approved there and in [DEPENDENCIES](docs/DEPENDENCIES.md).
 - Work on a branch and merge through a pull request (CI runs only on pull requests); never commit directly to `master` unless the owner asks.
-- Keep infrastructure genre-agnostic; gameplay goes to frameworks/scripts.
-- Rust simulates, Luau decides, server is authoritative.
+- Keep infrastructure genre-agnostic; gameplay goes to frameworks and games (Rust, optionally Luau).
+- Rust implements engine and gameplay; Luau optionally scripts gameplay through engine contracts; the server is authoritative either way.
 - Justify every dependency and abstraction. Confirm undecided choices (rigid-body dynamics, anything covered only by a *Proposed* ADR) with the user instead of assuming.
 - No speculative frameworks (RPG/racing/etc.), no invented modules, no client authority over outcomes, no bypassing the Rust/Luau boundary.
 - When responsibilities are ambiguous or a nested document conflicts with this one, report it.

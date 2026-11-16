@@ -7,7 +7,7 @@ How Spawn's subsystems fit together, derived from the [ADRs](../adr/README.md). 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
 │ Game projects (separate repositories, proposed ADR-0022)           │
-│   game rules, content packages, Luau scripts, platform services    │
+│   game rules in Rust (optionally Luau), content packages, services │
 ├────────────────────────────────────────────────────────────────────┤
 │ Gameplay frameworks (frameworks/, e.g. spawn-framework-fps)        │
 ├────────────────────────────────────────────────────────────────────┤
@@ -156,7 +156,9 @@ Scenes are plain data: nodes with UUIDs and component records keyed by stable ty
 - Runtime extension: packages (`base`, `official`, `mod`) with RON manifests; official packages signed; mods untrusted (data, assets, sandboxed Luau only).
 - Multiplayer: the server announces its package set; clients must match by content hash.
 
-### 4.4 Scripting (*proposed* ADR-0017)
+### 4.4 Gameplay code and scripting (*proposed* ADR-0017 for Luau)
+
+Gameplay is Rust by default: games and frameworks register components and systems with the engine at startup. Luau is optional and talks to the same engine contracts:
 
 ```text
 gameplay event ──► server VM (rules)   ──► commands ──► applied by Rust at sync points

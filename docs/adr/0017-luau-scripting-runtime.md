@@ -6,7 +6,7 @@
 
 ## Context
 
-Root rules already define the Rust/Luau split, the sandbox, execution limits, client/server VM separation and versioned API. This ADR fixes the concrete integration choices so the first implementation follows them.
+Luau is **optional**: games may be written entirely in Rust, and nothing in the engine or frameworks requires `spawn-scripting` (root [Rust and Luau](../../AGENTS.md#rust-and-luau)). Root rules already define the Rust/Luau split, the sandbox, execution limits, client/server VM separation and versioned API. This ADR fixes the concrete integration choices so the first implementation follows them.
 
 ## Decision
 

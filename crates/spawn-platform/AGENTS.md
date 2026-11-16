@@ -8,7 +8,7 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 
 ## Responsibilities
 
-- Window creation and lifecycle, display/monitor information, surface handles for rendering (PLANNED).
+- Window creation and lifecycle, display/monitor information, surface handles for rendering (PLANNED: backends are decided, not implemented).
 - Event loop and delivery of raw OS events (window, keyboard, mouse, gamepad connection) to consumers.
 - Platform-specific differences hidden behind one abstraction (Windows and Linux; see [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md)).
 - In-house OS backends for Windows (Win32) and Linux (Wayland and X11); macOS is not supported. Spawn owns the event loop. Accepted in [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md). Per [ADR-0002](../../docs/adr/0002-platform-owns-raw-input-events.md) (accepted), the native backend is compiled only behind a Cargo feature; raw event types are available without it.
@@ -27,6 +27,7 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 ## Public API Guidelines
 
 - Expose engine-defined types, not backend types (no OS handles, binding-crate types, or protocol objects in the public API).
+- Exception: the window type implements the `raw-window-handle` traits so `spawn-render` can create a surface (SPN-INV-011, [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md)). Expose only those traits/handle contracts, nothing else from backend crates.
 - Event delivery is explicit about thread and ordering guarantees.
 
 ## Internal Design Principles
@@ -55,4 +56,5 @@ Operating-system integration: windows, surfaces, system/window events, event loo
 ## Agent Instructions
 
 - Do not add input mapping or action logic.
-- Do not select a windowing backend without user confirmation.
+- The backends are decided ([ADR-0001](../../docs/adr/0001-in-house-platform-layer.md)): Win32 on Windows, Wayland and X11 on Linux, an in-house abstraction, and a Spawn-owned event loop; macOS is out of the target matrix. Do not reopen this choice without a new ADR.
+- Decided is not implemented: no backend exists yet (`SCAFFOLD`); implement each backend behind its Cargo feature and record its smoke test before claiming support.

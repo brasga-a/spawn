@@ -21,9 +21,10 @@ Gates reference [INVARIANTS](INVARIANTS.md) by ID. Tooling referenced here is ap
 - [ ] `cargo test --workspace` passes; new behavior has tests.
 - [ ] `cargo doc --no-deps` has no warnings; public items are documented.
 - [ ] Nothing claimed as working that was not run; anything not verified is stated in the commit or PR.
+- [ ] `cargo deny check` passes (SPN-INV-020, SPN-INV-021).
 - [ ] Affected `AGENTS.md` files and docs are updated in the same change (SPN-INV-101).
 
-`scripts/check.sh` runs all of the above (and `cargo deny check` when `cargo-deny` is installed).
+`scripts/check.sh` runs every automated item above. If a mandatory tool (e.g. `cargo-deny`) is missing, it reports the validation as **incomplete** and exits with a nonzero status; G0 is not passed until every check has actually run.
 
 ## G1 — Pull request
 

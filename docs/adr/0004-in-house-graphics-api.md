@@ -24,7 +24,7 @@ Spawn builds its own graphics API (a rendering hardware interface, RHI) inside `
 2. **No third-party graphics abstraction** (`wgpu`, SDL3 GPU, bgfx, etc.) is a dependency. They are used as **design references** only (see [References](#references)).
 3. **Internal, not public.** The RHI is an internal layer of `spawn-render`. Other crates see Spawn-defined handles and descriptors from `spawn-render`'s public API, never Vulkan types and never RHI internals.
 4. **Explicit by design.** The RHI exposes queues, synchronization and memory explicitly to the rest of `spawn-render`. Convenience (automatic barriers, transient-resource aliasing) is built on top later by a render graph, not hidden inside the RHI.
-5. **Window handle** through the `raw-window-handle` traits implemented by `spawn-platform`'s window ([ADR-0001](0001-in-house-platform-layer.md)), so `spawn-render` does not depend on `spawn-platform`.
+5. **Window handle** through the `raw-window-handle` traits implemented by `spawn-platform`'s window ([ADR-0001](0001-in-house-platform-layer.md)), so `spawn-render` does not depend on `spawn-platform`. This is the only third-party type allowed at the public boundary of either crate, limited to the traits/handles needed to create a surface; Vulkan and `ash` types stay private (SPN-INV-011 in [INVARIANTS](../architecture/INVARIANTS.md)).
 
 ## Detailed decisions (owner-confirmed)
 

@@ -4,7 +4,7 @@ Local rules for `spawn-scripting` (crate). Global rules: [root AGENTS.md](../../
 
 ## Purpose
 
-The only crate that integrates Luau (via `mlua`, PLANNED): VM management, script execution, sandboxing, script lifecycle, and the controlled, versioned engine API exposed to scripts.
+The only crate that integrates Luau (via `mlua`, PLANNED): VM management, script execution, sandboxing, script lifecycle, and the controlled, versioned engine API exposed to scripts. **Optional:** games may be written entirely in Rust and never link this crate.
 
 ## Responsibilities
 
@@ -19,13 +19,14 @@ The only crate that integrates Luau (via `mlua`, PLANNED): VM management, script
 
 - Scene structure and script *references* (`spawn-scene`); world orchestration (`spawn-world`).
 - Simulation loops, physics, hit registration, per-entity per-tick logic (Rust systems).
-- Gameplay content and rules (scripts in games/frameworks); config data (declarative data files).
+- Gameplay content and rules (Rust or scripts in games/frameworks); config data (declarative data files).
+- Component registration, system execution and game initialization: these are Rust engine APIs ([root: Rust and Luau](../../AGENTS.md#rust-and-luau)); this crate only exposes selected engine contracts to scripts.
 - Runtime type metadata (`spawn-reflect`) — available for implementing the API, but it never defines what is exposed.
 
 ## Architectural Boundaries
 
 - Sole owner of `mlua`; no other crate imports `mlua` types ([root: Rust and Luau](../../AGENTS.md#rust-and-luau)). Verify mlua's Luau feature support before adding it and pin in `[workspace.dependencies]`.
-- Higher layer: may depend on `spawn-ecs`, `spawn-math`, `spawn-reflect`, `spawn-assets` as needed; engine systems must not depend on it — they define traits/events/commands it implements or consumes.
+- Higher layer: may depend on `spawn-ecs`, `spawn-math`, `spawn-reflect`, `spawn-assets` as needed; engine systems and frameworks must not depend on it — they define traits/events/commands it implements or consumes, so Rust-only games work without it.
 - Must not expose raw Rust structures, pointers, ECS internals, or filesystem/OS/network access.
 
 ## Public API Guidelines
