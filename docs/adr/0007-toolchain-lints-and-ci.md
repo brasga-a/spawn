@@ -25,7 +25,7 @@ The workspace has no `rust-toolchain.toml`, no `rustfmt`/`clippy` configuration,
    - **Windows job:** `cargo check --workspace --all-targets` and `cargo test --workspace` on a Windows runner (catches Win32 backend compile errors).
    - **License/dependency job:** `cargo-deny` per [ADR-0008](0008-third-party-license-policy.md).
    - **Headless guarantee:** CI has no GPU and no display. Tests that need a GPU or window are `#[ignore]`d and run manually on the reference hardware.
-6. **Local check command:** a single documented command (e.g. a Cargo alias) runs the same checks as the Linux CI job locally, since CI does not run on direct pushes.
+6. **Local check command:** `scripts/check.sh` runs the same checks as the Linux CI job plus `cargo deny check`, since CI does not run on direct pushes. If a mandatory tool is missing, it reports the run as incomplete and exits nonzero; it never reports success for a skipped check.
 7. **Builds:** dev profile with `opt-level = 1` for the workspace and `opt-level = 3` for dependencies once dependencies exist (games are unusable at `opt-level = 0`); release profile with `lto = "thin"` and `codegen-units = 1` evaluated by measurement.
 
 ## Alternatives

@@ -22,7 +22,7 @@ Rules that must never be violated anywhere in Spawn. Each invariant has a stable
 | SPN-INV-008 | `spawn-scene` does not depend on `spawn-ecs` (*proposed*). | [ADR-0021](../adr/0021-scene-ecs-relationship.md) | auto |
 | SPN-INV-009 | Headless consumers (tests, dedicated servers, CLI validation) build without window, GPU or audio backends. | [ADR-0002](../adr/0002-platform-owns-raw-input-events.md), root [Workspace](../../AGENTS.md#workspace) | auto (CI is headless) |
 | SPN-INV-010 | `mlua` types appear only inside `spawn-scripting`. | Root [Rust and Luau](../../AGENTS.md#rust-and-luau) | auto (grep), review |
-| SPN-INV-011 | No backend or third-party type (Vulkan, OS handles, binding-crate types, `egui`, Steam) appears in an engine crate's public API. | [ADR-0001](../adr/0001-in-house-platform-layer.md), [ADR-0004](../adr/0004-in-house-graphics-api.md), [ADR-0010](../adr/0010-math-library.md) | review |
+| SPN-INV-011 | No backend or third-party type (Vulkan/`ash`, OS handles, binding-crate types, `egui`, Steam) appears in an engine crate's public API; backend implementation details stay private. **Single approved exception:** the `raw-window-handle` interoperability boundary between `spawn-platform` and `spawn-render` (ADR-0004): the platform window may implement, and the renderer may accept, the `raw-window-handle` traits and handle types, exposing only the minimum needed to create a surface. This exception does not authorize any other third-party type in public APIs. | [ADR-0001](../adr/0001-in-house-platform-layer.md), [ADR-0004](../adr/0004-in-house-graphics-api.md), [ADR-0010](../adr/0010-math-library.md) | review |
 | SPN-INV-012 | `egui` and editor code never enter the game runtime; `ufbx` and asset decoders exist only in tools. | [ADR-0015](../adr/0015-asset-pipeline.md), [DEPENDENCIES](../DEPENDENCIES.md) | auto (`cargo tree` of runtime crates) |
 
 ## Licensing and dependencies
@@ -87,6 +87,7 @@ Rules that must never be violated anywhere in Spawn. Each invariant has a stable
 
 | ID | Invariant | Source | Verify |
 | --- | --- | --- | --- |
+| SPN-INV-069 | Luau is optional: games can be implemented entirely in Rust; no engine crate or framework depends on `spawn-scripting`, and component registration, system execution and game initialization never require Luau. | Root [Rust and Luau](../../AGENTS.md#rust-and-luau) | auto (`cargo tree`), review |
 | SPN-INV-070 | Luau runs on events and decisions, never as a per-entity per-tick loop. | Root [Rust and Luau](../../AGENTS.md#rust-and-luau) | review, profiler budget |
 | SPN-INV-071 | Script APIs are allowlisted (default deny); scripts get no filesystem, OS or network access; every value crossing into Rust is validated. | Root [Scripting](../../AGENTS.md#data-driven-design-and-scripting-security) | test (sandbox escapes) |
 | SPN-INV-072 | Client and server scripts run in separate VMs with separate APIs. | Root [Scripting](../../AGENTS.md#data-driven-design-and-scripting-security) | test |

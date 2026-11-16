@@ -27,7 +27,8 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Public API Guidelines
 
-- Hide the graphics backend; no Vulkan or RHI-internal types in public APIs.
+- Hide the graphics backend; no Vulkan, `ash` or RHI-internal types in public APIs.
+- The only third-party types accepted at the public boundary are the `raw-window-handle` traits/handles needed to create a surface from a window (SPN-INV-011); keep that surface minimal.
 - Resources are referenced by handles; frame data is plain data.
 
 ## Internal Design Principles
@@ -55,5 +56,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Agent Instructions
 
-- Never add gameplay logic. Do not pick the GPU backend or add dependencies without confirmation and a recorded rationale.
+- Never add gameplay logic.
+- The backend is decided ([ADR-0004](../../docs/adr/0004-in-house-graphics-api.md)): Vulkan 1.3 through `ash`, in-house RHI as a private module, in-house GPU memory allocator; `wgpu` is a design reference only. Do not reopen this choice without a new ADR.
+- New dependencies beyond the approved list need justification under the root dependency rules and owner approval.
 - Start from the minimal vertical slice ([foundation PLAN](../../docs/foundation/PLAN.md): clear frame first; triangle and mesh/camera are later milestones); no premature render graph.

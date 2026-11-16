@@ -12,8 +12,8 @@ A game needs to grow: new maps, weapons, modes, DLC, seasonal content, and commu
 
 ### Two extension levels
 
-1. **Compile-time extension (code, Rust):** games and frameworks extend the engine by **registering** systems, components, resources, asset loaders, data definition types and script APIs through engine registration APIs at startup. Linking is static. **No dynamic loading of Rust libraries** (`dylib`/`cdylib` plugins) and **no native-code mods**: native code from packages would be arbitrary code execution.
-2. **Runtime extension (content, packages):** everything added after the build ships is a **package** containing only data, assets and Luau scripts.
+1. **Compile-time extension (code, Rust):** the primary way to implement gameplay; a game may be entirely Rust. Games and frameworks extend the engine by **registering** systems, components, resources, asset loaders, data definition types and script APIs through engine registration APIs at startup. Linking is static. **No dynamic loading of Rust libraries** (`dylib`/`cdylib` plugins) and **no native-code mods**: native code from packages would be arbitrary code execution.
+2. **Runtime extension (content, packages):** everything added after the build ships is a **package** containing only data, assets and, optionally, Luau scripts. A Rust-only game ships packages without scripts; new Rust gameplay code arrives through a game update.
 
 ### Packages
 

@@ -38,6 +38,7 @@ Consolidated record of every architectural decision: what was decided, which cra
 
 | Decision | Status | Where |
 | --- | --- | --- |
+| Rust is a first-class gameplay language; Luau is optional (games may be Rust-only; engine and frameworks never require `spawn-scripting`) | Accepted | Root [Rust and Luau](../../AGENTS.md#rust-and-luau), SPN-INV-069 |
 | Document precedence: root `AGENTS.md` → crate `AGENTS.md` → milestone specs → ADRs (rationale) | Accepted | Root [AGENTS.md](../../AGENTS.md) |
 | Reference hardware: Ryzen 5 1600, RX 460 (RADV, Vulkan 1.4), Linux with PipeWire; minimum target | Accepted | Root [Accepted Decisions](../../AGENTS.md#accepted-decisions) |
 | First smoke-test platform: Linux, Wayland (Hyprland) | Accepted | [foundation SPEC](../foundation/SPEC.md) |
