@@ -2,7 +2,7 @@
 
 Mandatory checks a change must pass before it moves forward. A gate is **passed** only when every item is satisfied or explicitly marked not applicable with a reason. Failing a gate blocks the step; it is never waived silently.
 
-Gates reference [INVARIANTS](INVARIANTS.md) by ID. Tooling referenced here (toolchain file, lints, CI, local check command) is decided in [ADR-0007](../adr/0007-toolchain-lints-and-ci.md) and is `PLANNED` until applied; until then, gates are checked by running the commands manually.
+Gates reference [INVARIANTS](INVARIANTS.md) by ID. Tooling referenced here is applied from [ADR-0007](../adr/0007-toolchain-lints-and-ci.md): `rust-toolchain.toml`, workspace lints, `.github/workflows/ci.yml`, `deny.toml` and `scripts/check.sh`.
 
 ## Gate overview
 
@@ -23,7 +23,7 @@ Gates reference [INVARIANTS](INVARIANTS.md) by ID. Tooling referenced here (tool
 - [ ] Nothing claimed as working that was not run; anything not verified is stated in the commit or PR.
 - [ ] Affected `AGENTS.md` files and docs are updated in the same change (SPN-INV-101).
 
-The local check command from ADR-0007 runs all of the above once it exists.
+`scripts/check.sh` runs all of the above (and `cargo deny check` when `cargo-deny` is installed).
 
 ## G1 — Pull request
 

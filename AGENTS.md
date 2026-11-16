@@ -58,7 +58,7 @@ Integration layer: `mlua` with the `luau` feature (`PLANNED`; not a dependency).
 
 ## Workspace
 
-Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version` and `edition` (2024), inherited by every member via `version.workspace = true` / `edition.workspace = true`. No `[workspace.dependencies]` exist yet. **Every package currently has zero dependencies** (including inter-crate), so no actual dependency edges exist; all edges in nested documents are `PLANNED`.
+Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version`, `edition` (2024), `license` (MIT) and `rust-version` (1.99.1), inherited by every member; `[workspace.lints]` (ADR-0007) is inherited by every member through `[lints] workspace = true`; dev profile uses `opt-level = 1` (dependencies `opt-level = 3`). No `[workspace.dependencies]` exist yet. **Every package currently has zero dependencies** (including inter-crate), so no actual dependency edges exist; all edges in nested documents are `PLANNED`.
 
 Conventions:
 - One crate per subsystem with a narrow public API; names `spawn-<subsystem>`.
@@ -97,7 +97,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-editor](tools/spawn-editor/AGENTS.md) | Graphical authoring tools | SCAFFOLD |
 | [spawn-mcp](tools/spawn-mcp/AGENTS.md) | MCP server for external AI agents/tools | SCAFFOLD |
 
-Verified scaffold state: every `lib.rs` is the unmodified `cargo new --lib` stub (`add` function and `it_works` test). That stub carries no engine meaning and is not API.
+Verified scaffold state: every `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
 
 Ownership rule: each piece of state has exactly one owning system; others use its API. If a responsibility seems to fit two crates, stop and report rather than duplicate it.
 
@@ -132,7 +132,7 @@ Ownership rule: each piece of state has exactly one owning system; others use it
 
 ## Engineering Standards
 
-- Stable toolchain pinned, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. Toolchain file, workspace lints and pull-request CI are decided in [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md) and not yet applied (`PLANNED`).
+- Stable toolchain pinned, edition 2024. `cargo fmt`; `cargo clippy --all-targets -- -D warnings` clean. Applied from [ADR-0007](docs/adr/0007-toolchain-lints-and-ci.md) (`EXISTS`): `rust-toolchain.toml`, `[workspace.lints]` + `clippy.toml`, `.github/workflows/ci.yml` (pull requests), `deny.toml`, and the local check command **`scripts/check.sh`** (run it before every push). Without `rustup` (e.g. distribution-packaged Rust), `rust-toolchain.toml` is ignored locally; use the pinned version.
 - `unsafe` only when needed (GPU/FFI/perf); each block has a `// SAFETY:` comment and, where feasible, a test.
 - No `unwrap()`/`expect()`/`panic!`/`todo!` outside tests. Fallible functions return `Result` with typed errors carrying origin location, error code and cause chain ([ADR-0009](docs/adr/0009-error-handling-and-diagnostics.md)); foundation crates never panic on behalf of callers; panic only on true invariant violations.
 - Untrusted input (packets, mod scripts/data, asset files) must never cause panic, unbounded allocation, or UB.

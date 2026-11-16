@@ -1,0 +1,36 @@
+# cargo-deny configuration (ADR-0008). Approved crates: docs/DEPENDENCIES.md.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories fail the check; unmaintained crates are reported.
+yanked = "deny"
+
+[licenses]
+# Allowed in shipped code. MPL-2.0 needs owner approval (add per crate in [[licenses.exceptions]]).
+# Royalty-free proprietary SDKs are isolated in integration crates and listed as exceptions by their ADR.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

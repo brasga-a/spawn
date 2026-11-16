@@ -5,10 +5,38 @@ members = [".", "crates/*", "tools/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+rust-version = "1.99.1"
+
+# Lints (ADR-0007), inherited by every package through `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# Build profiles (ADR-0007): games are unusable at opt-level 0.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [package]
 name = "spawn-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]

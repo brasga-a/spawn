@@ -54,4 +54,4 @@ A required feature needs nightly; GPU tests become necessary for regressions; CI
 
 ## Acceptance conditions
 
-Accepted by the owner. Applying it (configuration files, manifests, code) is an implementation task.
+Accepted by the owner. **Applied:** `rust-toolchain.toml`, `clippy.toml`, `[workspace.lints]` with `[lints] workspace = true` in every package, dev profiles, `.github/workflows/ci.yml`, `deny.toml` and `scripts/check.sh`. Lint enforcement verified locally (an `unwrap()` and an undocumented public function are rejected). CI and `cargo-deny` are verified on the first pull request.

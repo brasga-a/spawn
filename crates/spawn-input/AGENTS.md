@@ -44,7 +44,7 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 
 ## Current Implementation Status
 
-`SCAFFOLD`. `src/lib.rs` is the unmodified `cargo new --lib` stub (an `add` function and an `it_works` test); `Cargo.toml` declares no dependencies and inherits `version`/`edition` from the workspace. No device, input state, or mapping exists. The stub is not API and must not be depended on or preserved.
+`SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No device, input state, or mapping exists.
 
 ## Agent Instructions
 

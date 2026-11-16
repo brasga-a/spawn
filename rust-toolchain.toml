@@ -1,0 +1,5 @@
+# Pinned toolchain (ADR-0007). Upgrades are deliberate, one commit, with the full check suite passing.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
