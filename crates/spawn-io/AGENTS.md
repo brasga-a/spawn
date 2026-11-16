@@ -42,6 +42,12 @@ Low-level data input/output: filesystem operations, byte streams, virtual paths/
 
 - Tests against temp directories and in-memory backends; path-traversal and error-path tests.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (asset pipeline). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0024](../../docs/adr/0024-packages-and-game-extensions.md) (packages and extensions).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `rustix`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No filesystem, stream, or path abstraction exists.
@@ -50,4 +56,3 @@ Low-level data input/output: filesystem operations, byte streams, virtual paths/
 
 - Do not add input-device or windowing code.
 - Do not add asset parsing; stop at bytes and streams.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (archive mounts for shipping builds).

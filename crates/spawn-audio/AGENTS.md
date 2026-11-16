@@ -37,6 +37,11 @@ Audio runtime: device output, playback, mixing, and spatial sound.
 
 - Headless mixer tests with a null output device; spatialization math tests; stress tests for voice limits.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0006](../../docs/adr/0006-in-house-audio.md) (audio), [ADR-0001](../../docs/adr/0001-in-house-platform-layer.md) (platform layer). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `windows-sys`, `pipewire`, `rustix`, `opus`, `lewton`, `rubato`, `realfft`, `rustfft`, `sofar`. Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No audio playback or mixer exists.

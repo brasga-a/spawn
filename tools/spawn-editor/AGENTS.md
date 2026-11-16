@@ -11,7 +11,7 @@ Graphical development tools: scene editing, inspectors, asset browsing, and view
 - Editor application shell, panels, inspectors, and scene/asset editing workflows (PLANNED).
 - Viewport integration displaying engine rendering output.
 - Editing operations expressed as engine-level commands with undo/redo.
-- Editor UI framework: `egui` is permitted here (unadopted).
+- Editor UI framework: `egui` and `egui_dock`, approved for this tool only ([DEPENDENCIES](../../docs/DEPENDENCIES.md)); never in game runtime crates.
 
 ## Non-Responsibilities
 
@@ -38,6 +38,11 @@ Graphical development tools: scene editing, inspectors, asset browsing, and view
 ## Testing Requirements
 
 - Headless tests of command/undo logic and data models; UI rendering is not required in CI.
+
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (asset pipeline), [ADR-0013](../../docs/adr/0013-declarative-data-format.md) (data format). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `egui`, `egui_dock`, `notify`. Any other crate needs owner approval first.
 
 ## Current Implementation Status
 

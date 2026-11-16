@@ -43,6 +43,12 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 - Headless unit tests for CPU-side logic; golden-image tests only if a headless adapter is available; benchmarks for frame extraction and culling.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `ash`, `raw-window-handle`, `bytemuck`, `renderdoc` (behind a feature), `gpu-allocator` (fallback only). Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No GPU, shader, material, or pipeline code exists.
@@ -50,5 +56,4 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 ## Agent Instructions
 
 - Never add gameplay logic. Do not pick the GPU backend or add dependencies without confirmation and a recorded rationale.
-- Start from the minimal vertical slice (root roadmap: clear → triangle → mesh/camera); no premature render graph.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0010](../../docs/adr/0010-math-library.md) (reversed-Z, conventions).
+- Start from the minimal vertical slice ([foundation PLAN](../../docs/foundation/PLAN.md): clear frame first; triangle and mesh/camera are later milestones); no premature render graph.

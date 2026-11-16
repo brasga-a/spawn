@@ -21,11 +21,11 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 ## Architectural Boundaries
 
 - Foundation crate: depends on no other `spawn-*` crate. Any crate may depend on it.
-- Using an external math crate (e.g. `glam`) is an unadopted option: either wrap or re-export decisions must be recorded in [root: Workspace](../../AGENTS.md#workspace) per the dependency rules. Do not leak a third-party type into public APIs unintentionally.
+- In-house types only; no third-party math type in any public API. Transcendental functions of the deterministic subset wrap `libm`; `glam` is used only as a test oracle ([ADR-0010](../../docs/adr/0010-math-library.md)).
 
 ## Public API Guidelines
 
-- Conventions (coordinate system, handedness, rotation order, units) are stated once in crate docs and never vary.
+- Conventions are fixed by ADR-0010 and stated once in crate docs: right-handed, Y-up, −Z forward; meters, seconds, kilograms, radians; column-major; reversed-Z. Absolute world positions use distinct `f64` types; local data is `f32`; conversion is explicit.
 - Small, `Copy` value types; free of lifetimes and heap use.
 - Do not expose script-facing or network-facing behavior here; those layers adapt these types.
 
@@ -45,6 +45,11 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 - Property-based tests for algebraic laws (e.g. rotation composition, inverse round-trips) with tolerances.
 - Determinism tests for any operation used in prediction/reconciliation, comparing Windows and Linux results ([ADR-0005](../../docs/adr/0005-physics-strategy.md): movement code must not rely on platform math libraries for transcendental functions).
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions), [ADR-0005](../../docs/adr/0005-physics-strategy.md) (physics strategy). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `libm`, `bytemuck`, `glam` (test oracle only). Any other crate needs owner approval first.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No math type exists.
@@ -53,5 +58,4 @@ Provides the numeric and geometric primitives (vectors, matrices, quaternions, t
 
 - Do not add physics, rendering, or gameplay helpers.
 - Document convention changes as breaking and update all dependents' docs.
-- Confirm with the user before adopting an external math dependency.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0010](../../docs/adr/0010-math-library.md) (types, conventions, deterministic subset).
+- Only `libm` and `bytemuck` are approved runtime dependencies here; anything else needs owner approval.

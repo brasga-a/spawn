@@ -45,6 +45,12 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 - Headless unit tests for loop timing (accumulator behavior, catch-up limits, no spiral of death) once implemented.
 - Compile-time/doc tests showing a minimal implementor of each contract.
 
+## Governing Decisions
+
+- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (fixed-step loop, tick index, threading), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0012](../../docs/adr/0012-job-system.md) (job system). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): none beyond workspace-wide test tools. Any other crate needs owner approval first.
+- The job system is **not** part of this crate; it lives in the planned `spawn-jobs` crate.
+
 ## Current Implementation Status
 
 `SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No lifecycle contract, loop, or shared type exists.
@@ -53,5 +59,3 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 
 - Before adding anything here, check whether `spawn-math`, `spawn-io`, `spawn-profiler`, or `spawn-ecs` owns it.
 - Do not add dependencies on any `spawn-*` crate.
-- Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors).
-- The job system is **not** part of this crate; it lives in the planned `spawn-jobs` crate ([ADR-0012](../../docs/adr/0012-job-system.md), accepted).
