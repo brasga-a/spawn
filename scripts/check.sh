@@ -13,10 +13,16 @@ run() { echo "==> $*"; "$@"; }
 
 # Mandatory tools are verified before running anything, so a missing tool
 # can never be mistaken for a passing run.
+# Subcommands are probed through cargo itself, because cargo also finds them in
+# $CARGO_HOME/bin when that directory is not on PATH.
 missing=()
-for tool in cargo rustfmt cargo-clippy cargo-deny; do
-    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
-done
+if ! command -v cargo >/dev/null 2>&1; then
+    missing+=("cargo")
+else
+    cargo fmt --version >/dev/null 2>&1 || missing+=("rustfmt")
+    cargo clippy --version >/dev/null 2>&1 || missing+=("cargo-clippy")
+    cargo deny --version >/dev/null 2>&1 || missing+=("cargo-deny")
+fi
 if ((${#missing[@]} > 0)); then
     echo "ERROR: validation incomplete: missing mandatory tool(s): ${missing[*]}" >&2
     for tool in "${missing[@]}"; do
