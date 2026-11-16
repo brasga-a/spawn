@@ -1,0 +1,39 @@
+# CI (ADR-0007): runs on pull requests and on manual dispatch only.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  linux:
+    name: Linux (fmt, clippy, test, doc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rustup on the runner installs the toolchain pinned in rust-toolchain.toml.
+      - run: rustup show
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo doc --workspace --no-deps
+
+  windows:
+    name: Windows (check, test)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo check --workspace --all-targets
+      - run: cargo test --workspace
+
+  deny:
+    name: Licenses and advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

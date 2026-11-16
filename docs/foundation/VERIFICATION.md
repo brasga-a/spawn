@@ -40,7 +40,7 @@ A documented Linux-only smoke run does **not** imply Windows support. macOS is n
 - Safety and architecture invariants: [INVARIANTS.md](INVARIANTS.md) `FND-INV-01..15`.
 - Delivery order: [PLAN.md](PLAN.md).
 
-Every completed implementation PR should state: requirements covered, tests run (with output), platform tested, invariant changes (if any), and known limitations. Never report the preexisting `cargo new` stub tests as validation of the renderer or event loop.
+Every completed implementation PR should state: requirements covered, tests run (with output), platform tested, invariant changes (if any), and known limitations. Never report scaffold builds or empty test runs as validation of the renderer or event loop.
 
 ## Exit gate
 

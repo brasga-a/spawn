@@ -47,12 +47,11 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 
 ## Current Implementation Status
 
-`SCAFFOLD`. `src/lib.rs` is the unmodified `cargo new --lib` stub (an `add` function and an `it_works` test); `Cargo.toml` declares no dependencies and inherits `version`/`edition` from the workspace. No lifecycle contract, loop, or shared type exists. The stub is not API and must not be depended on or preserved.
+`SCAFFOLD`. `src/lib.rs` contains only a crate-level doc comment (no items, no tests); `Cargo.toml` declares no dependencies and inherits `version`, `edition`, `license`, `rust-version` and lints from the workspace. No lifecycle contract, loop, or shared type exists.
 
 ## Agent Instructions
 
 - Before adding anything here, check whether `spawn-math`, `spawn-io`, `spawn-profiler`, or `spawn-ecs` owns it.
 - Do not add dependencies on any `spawn-*` crate.
-- Remove the `add` stub when the first real item lands.
 - Proposed decisions affecting this crate (follow them once accepted; until then, do not implement contrary designs): [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors).
 - The job system is **not** part of this crate; it lives in the planned `spawn-jobs` crate ([ADR-0012](../../docs/adr/0012-job-system.md), accepted).
