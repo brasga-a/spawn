@@ -361,10 +361,19 @@ pub(crate) fn choose_present_mode(
     }
 }
 
-/// One more image than the minimum (so acquire rarely blocks), within the
-/// maximum (`0` means no maximum).
+/// Preferred swapchain image count: triple buffering.
+pub(crate) const PREFERRED_IMAGE_COUNT: u32 = 3;
+
+/// At least [`PREFERRED_IMAGE_COUNT`] images (triple buffering) or the
+/// surface minimum if larger, within the maximum (`0` means no maximum).
+///
+/// Each image beyond what the presentation engine needs adds one display
+/// refresh of queueing in FIFO mode. The former `min + 1` policy produced 4
+/// images on RADV/Wayland (`minImageCount = 3`) and measured 66.7 ms
+/// submit-to-scanout on the reference RX 460; 3 images measured 50.0 ms with
+/// unchanged 60 Hz pacing (`docs/first-3d/VERIFICATION.md`, input latency).
 pub(crate) fn choose_image_count(min: u32, max: u32) -> u32 {
-    let wanted = min.saturating_add(1);
+    let wanted = min.max(PREFERRED_IMAGE_COUNT);
     if max == 0 { wanted } else { wanted.min(max) }
 }
 
@@ -563,11 +572,19 @@ mod tests {
     }
 
     #[test]
-    fn image_count_is_min_plus_one_within_max() {
+    fn image_count_is_triple_buffered_or_surface_minimum_within_max() {
+        // Double-buffering surfaces get triple buffering.
+        assert_eq!(choose_image_count(1, 0), 3);
         assert_eq!(choose_image_count(2, 0), 3);
-        assert_eq!(choose_image_count(3, 8), 4);
-        assert_eq!(choose_image_count(3, 3), 3);
+        assert_eq!(choose_image_count(2, 8), 3);
+        // RADV/Wayland reports `minImageCount = 3`: no extra queued image (latency).
+        assert_eq!(choose_image_count(3, 0), 3);
+        assert_eq!(choose_image_count(3, 8), 3);
+        // A larger surface minimum is always honored.
+        assert_eq!(choose_image_count(4, 8), 4);
         assert_eq!(choose_image_count(u32::MAX, 0), u32::MAX);
+        // The surface maximum caps the preference.
+        assert_eq!(choose_image_count(1, 2), 2);
     }
 
     #[test]
