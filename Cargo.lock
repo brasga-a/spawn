@@ -213,6 +213,10 @@ dependencies = [
 [[package]]
 name = "spawn-input"
 version = "0.1.0"
+dependencies = [
+ "spawn-core",
+ "spawn-platform",
+]
 
 [[package]]
 name = "spawn-io"

@@ -93,6 +93,21 @@ pub enum ElementState {
     Released,
 }
 
+/// How a window constrains the pointer cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CursorGrabMode {
+    /// The cursor moves freely and can leave the window.
+    #[default]
+    None,
+    /// The cursor stays within the window's drawable region, but still moves
+    /// inside it.
+    Confined,
+    /// The cursor is locked in place; absolute [`WindowEvent::PointerMoved`]
+    /// events stop while locked and motion is reported through
+    /// [`WindowEvent::PointerRelativeMotion`].
+    Locked,
+}
+
 /// Amount scrolled by one scroll event.
 ///
 /// Positive `y` scrolls content down (wheel rotated towards the user); positive
@@ -169,6 +184,18 @@ pub enum WindowEvent {
     PointerLeft,
     /// The pointer moved to this position inside the window.
     PointerMoved(PhysicalPosition),
+    /// Unaccelerated relative pointer motion from the pointing device.
+    ///
+    /// Unlike [`WindowEvent::PointerMoved`], deltas are raw unaccelerated
+    /// motion: they are not scaled by the window's scale factor and are not
+    /// clipped by screen edges or [`CursorGrabMode::Locked`]. Positive `dx`
+    /// moves right; positive `dy` moves down.
+    PointerRelativeMotion {
+        /// Horizontal unaccelerated delta (positive right).
+        dx: f64,
+        /// Vertical unaccelerated delta (positive down).
+        dy: f64,
+    },
     /// A pointer button was pressed or released.
     PointerButton {
         /// Which button.
@@ -178,6 +205,13 @@ pub enum WindowEvent {
     },
     /// The scroll wheel or touchpad scrolled.
     Scroll(ScrollDelta),
+    /// The window's active cursor constraint changed.
+    ///
+    /// Requesting a constraint may take effect asynchronously once the window
+    /// system activates it, and the window system or focus loss may release an
+    /// active constraint back to [`CursorGrabMode::None`] at any time. This
+    /// event reports the mode now in effect.
+    CursorGrabChanged(CursorGrabMode),
 }
 
 /// A raw platform event.
@@ -211,5 +245,11 @@ mod tests {
         assert!(PhysicalSize::new(0, 10).is_empty());
         assert!(PhysicalSize::new(10, 0).is_empty());
         assert!(!PhysicalSize::new(1, 1).is_empty());
+    }
+
+    #[test]
+    fn cursor_grab_mode_defaults_to_none() {
+        assert_eq!(CursorGrabMode::default(), CursorGrabMode::None);
+        assert_ne!(CursorGrabMode::Confined, CursorGrabMode::Locked);
     }
 }

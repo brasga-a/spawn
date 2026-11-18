@@ -11,8 +11,8 @@
 //! messages are grouped and emitted at the pointer `frame` that ends them.
 
 use crate::event::{
-    ElementState, Event, KeyEvent, LogicalSize, PhysicalPosition, PhysicalSize, ScrollDelta,
-    WindowEvent, WindowId,
+    CursorGrabMode, ElementState, Event, KeyEvent, LogicalSize, PhysicalPosition, PhysicalSize,
+    ScrollDelta, WindowEvent, WindowId,
 };
 use crate::linux::evdev;
 
@@ -62,6 +62,30 @@ pub(crate) struct SurfaceUpdate {
     pub viewport_destination: Option<LogicalSize>,
 }
 
+/// Generation identifier pairing a protocol constraint object with its request
+/// in [`Translator`], so late events from a replaced or destroyed constraint
+/// are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ConstraintId(u64);
+
+/// Protocol actions the glue must apply after [`Translator::request_cursor_grab`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConstraintUpdate {
+    /// Destroy the window's existing protocol constraint object first.
+    pub destroy_previous: bool,
+    /// Create a new oneshot constraint object tagged with this identifier.
+    pub create: Option<(ConstraintId, CursorGrabMode)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConstraintState {
+    id: ConstraintId,
+    /// Requested constraint mode (`Confined` or `Locked`, never `None`).
+    requested: CursorGrabMode,
+    /// Whether the compositor has activated this constraint.
+    active: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct PendingConfigure {
     /// Size suggested by the latest toplevel configure; `None` means "client
@@ -78,6 +102,7 @@ struct WindowRecord {
     pending: PendingConfigure,
     configured: bool,
     occluded: bool,
+    constraint: Option<ConstraintState>,
 }
 
 /// Scroll accumulated between pointer frames, in surface-local units.
@@ -110,6 +135,7 @@ impl Axis {
 pub(crate) struct Translator {
     windows: Vec<WindowRecord>,
     next_id: u64,
+    next_constraint_id: u64,
     keyboard_focus: Option<WindowId>,
     pointer_focus: Option<WindowId>,
     scroll: PendingScroll,
@@ -130,6 +156,7 @@ impl Translator {
             pending: PendingConfigure::default(),
             configured: false,
             occluded: false,
+            constraint: None,
         });
         id
     }
@@ -158,6 +185,112 @@ impl Translator {
     /// Current metrics of a live window.
     pub(crate) fn metrics(&self, id: WindowId) -> Option<SurfaceMetrics> {
         self.window(id).map(|window| window.metrics)
+    }
+
+    /// Currently active cursor constraint of a live window.
+    pub(crate) fn cursor_grab(&self, id: WindowId) -> Option<CursorGrabMode> {
+        let window = self.window(id)?;
+        Some(match window.constraint {
+            Some(constraint) if constraint.active => constraint.requested,
+            _ => CursorGrabMode::None,
+        })
+    }
+
+    /// Updates a window's requested cursor constraint and returns the protocol
+    /// actions to perform, or `None` if `id` is unknown.
+    ///
+    /// Repeating the already-requested mode is a no-op. Replacing or clearing
+    /// an active constraint immediately transitions the active mode to
+    /// [`CursorGrabMode::None`] and emits [`WindowEvent::CursorGrabChanged`].
+    pub(crate) fn request_cursor_grab(
+        &mut self,
+        id: WindowId,
+        mode: CursorGrabMode,
+    ) -> Option<ConstraintUpdate> {
+        match mode {
+            CursorGrabMode::None => {
+                let window = self.window_mut(id)?;
+                let Some(previous) = window.constraint.take() else {
+                    return Some(ConstraintUpdate {
+                        destroy_previous: false,
+                        create: None,
+                    });
+                };
+                if previous.active {
+                    self.push(id, WindowEvent::CursorGrabChanged(CursorGrabMode::None));
+                }
+                Some(ConstraintUpdate {
+                    destroy_previous: true,
+                    create: None,
+                })
+            }
+            CursorGrabMode::Confined | CursorGrabMode::Locked => {
+                if self
+                    .window(id)?
+                    .constraint
+                    .is_some_and(|previous| previous.requested == mode)
+                {
+                    return Some(ConstraintUpdate {
+                        destroy_previous: false,
+                        create: None,
+                    });
+                }
+                let cid = ConstraintId(self.next_constraint_id);
+                self.next_constraint_id = self.next_constraint_id.saturating_add(1);
+                let window = self.window_mut(id)?;
+                let previous = window.constraint.replace(ConstraintState {
+                    id: cid,
+                    requested: mode,
+                    active: false,
+                });
+                if previous.is_some_and(|state| state.active) {
+                    self.push(id, WindowEvent::CursorGrabChanged(CursorGrabMode::None));
+                }
+                Some(ConstraintUpdate {
+                    destroy_previous: previous.is_some(),
+                    create: Some((cid, mode)),
+                })
+            }
+        }
+    }
+
+    /// `zwp_locked_pointer_v1.locked` or `zwp_confined_pointer_v1.confined`.
+    /// Ignored if `cid` is stale or already active.
+    pub(crate) fn constraint_activated(
+        &mut self,
+        id: WindowId,
+        cid: ConstraintId,
+        mode: CursorGrabMode,
+    ) {
+        let Some(window) = self.window_mut(id) else {
+            return;
+        };
+        let Some(state) = &mut window.constraint else {
+            return;
+        };
+        if state.id != cid || state.requested != mode || state.active {
+            return;
+        }
+        state.active = true;
+        self.push(id, WindowEvent::CursorGrabChanged(mode));
+    }
+
+    /// `zwp_locked_pointer_v1.unlocked` or `zwp_confined_pointer_v1.unconfined`.
+    /// Oneshot constraints become defunct on deactivation: returns `true` when
+    /// `cid` matched the current constraint so the glue destroys the defunct
+    /// protocol object.
+    pub(crate) fn constraint_deactivated(&mut self, id: WindowId, cid: ConstraintId) -> bool {
+        let Some(window) = self.window_mut(id) else {
+            return false;
+        };
+        if window.constraint.is_none_or(|state| state.id != cid) {
+            return false;
+        }
+        let previous = window.constraint.take();
+        if previous.is_some_and(|state| state.active) {
+            self.push(id, WindowEvent::CursorGrabChanged(CursorGrabMode::None));
+        }
+        true
     }
 
     /// Moves every queued event, in order, to the end of `out`.
@@ -253,26 +386,44 @@ impl Translator {
     }
 
     /// `wl_keyboard.enter`. Keys already held at enter are not reported as
-    /// presses (they were pressed elsewhere).
-    pub(crate) fn keyboard_enter(&mut self, id: WindowId) {
-        if self.window(id).is_none() {
-            return;
-        }
+    /// presses (they were pressed elsewhere). If another window held keyboard
+    /// focus with a cursor constraint, returns that window so the glue destroys
+    /// its constraint object.
+    pub(crate) fn keyboard_enter(&mut self, id: WindowId) -> Option<WindowId> {
+        self.window(id)?;
+        let mut destroy_constraint_on = None;
         if let Some(previous) = self.keyboard_focus.filter(|&previous| previous != id) {
             self.push(previous, WindowEvent::Focused(false));
+            if self.release_constraint(previous) {
+                destroy_constraint_on = Some(previous);
+            }
         }
         if self.keyboard_focus != Some(id) {
             self.keyboard_focus = Some(id);
             self.push(id, WindowEvent::Focused(true));
         }
+        destroy_constraint_on
     }
 
-    /// `wl_keyboard.leave`.
-    pub(crate) fn keyboard_leave(&mut self, id: WindowId) {
+    /// `wl_keyboard.leave`. Releases any pending or active cursor constraint on
+    /// `id` and returns `true` when a protocol constraint object must be
+    /// destroyed.
+    pub(crate) fn keyboard_leave(&mut self, id: WindowId) -> bool {
         if self.keyboard_focus == Some(id) {
             self.keyboard_focus = None;
             self.push(id, WindowEvent::Focused(false));
+            return self.release_constraint(id);
         }
+        false
+    }
+
+    /// Clears keyboard focus when the seat loses keyboard capability without a
+    /// prior `wl_keyboard.leave`. Returns the unfocused window if its protocol
+    /// constraint object must be destroyed.
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+    pub(crate) fn keyboard_capability_lost(&mut self) -> Option<WindowId> {
+        let id = self.keyboard_focus?;
+        self.keyboard_leave(id).then_some(id)
     }
 
     /// `wl_keyboard.key` with an evdev code. Dropped without keyboard focus.
@@ -290,25 +441,52 @@ impl Translator {
         }
     }
 
-    /// `wl_pointer.enter` at a surface-local position.
-    pub(crate) fn pointer_enter(&mut self, id: WindowId, x: f64, y: f64) {
-        let Some(metrics) = self.metrics(id) else {
-            return;
-        };
+    /// `wl_pointer.enter` at a surface-local position. Returns a previous
+    /// window whose active constraint must be destroyed, if focus moved
+    /// directly without a `wl_pointer.leave`.
+    pub(crate) fn pointer_enter(&mut self, id: WindowId, x: f64, y: f64) -> Option<WindowId> {
+        let metrics = self.metrics(id)?;
+        let mut destroy_constraint_on = None;
         if let Some(previous) = self.pointer_focus.filter(|&previous| previous != id) {
             self.push(previous, WindowEvent::PointerLeft);
+            if self.release_active_constraint(previous) {
+                destroy_constraint_on = Some(previous);
+            }
         }
         self.pointer_focus = Some(id);
         self.scroll = PendingScroll::default();
         self.push(id, WindowEvent::PointerEntered(metrics.to_physical(x, y)));
+        destroy_constraint_on
     }
 
-    /// `wl_pointer.leave`.
-    pub(crate) fn pointer_leave(&mut self, id: WindowId) {
+    /// `wl_pointer.leave`. Releases any active constraint on `id` (pending
+    /// unactivated requests stay pending while the window retains keyboard
+    /// focus) and returns `true` when its protocol object must be destroyed.
+    pub(crate) fn pointer_leave(&mut self, id: WindowId) -> bool {
         if self.pointer_focus == Some(id) {
             self.flush_scroll();
             self.pointer_focus = None;
             self.push(id, WindowEvent::PointerLeft);
+            return self.release_active_constraint(id);
+        }
+        false
+    }
+
+    /// Clears pointer focus and all pointer constraints when the seat loses
+    /// pointer capability.
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+    pub(crate) fn pointer_capability_lost(&mut self) {
+        if let Some(id) = self.pointer_focus {
+            let _ = self.pointer_leave(id);
+        }
+        let ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|window| window.constraint.is_some())
+            .map(|window| window.id)
+            .collect();
+        for id in ids {
+            let _ = self.release_constraint(id);
         }
     }
 
@@ -316,6 +494,28 @@ impl Translator {
     pub(crate) fn pointer_motion(&mut self, x: f64, y: f64) {
         if let Some((id, metrics)) = self.pointer_target() {
             self.push(id, WindowEvent::PointerMoved(metrics.to_physical(x, y)));
+        }
+    }
+
+    /// `zwp_relative_pointer_v1.relative_motion` unaccelerated deltas (already
+    /// decoded from `wl_fixed_t` to `f64`). Routed to the pointer-focused
+    /// window without display-scale multiplication; zero and non-finite deltas
+    /// are ignored.
+    pub(crate) fn pointer_relative_motion(&mut self, dx_unaccel: f64, dy_unaccel: f64) {
+        if !dx_unaccel.is_finite()
+            || !dy_unaccel.is_finite()
+            || (dx_unaccel == 0.0 && dy_unaccel == 0.0)
+        {
+            return;
+        }
+        if let Some((id, _)) = self.pointer_target() {
+            self.push(
+                id,
+                WindowEvent::PointerRelativeMotion {
+                    dx: dx_unaccel,
+                    dy: dy_unaccel,
+                },
+            );
         }
     }
 
@@ -390,6 +590,34 @@ impl Translator {
 
     fn window_mut(&mut self, id: WindowId) -> Option<&mut WindowRecord> {
         self.windows.iter_mut().find(|window| window.id == id)
+    }
+
+    /// Clears any constraint (pending or active) on `id`, emitting
+    /// `CursorGrabChanged(None)` if it was active. Returns whether a protocol
+    /// constraint object existed.
+    fn release_constraint(&mut self, id: WindowId) -> bool {
+        let Some(window) = self.window_mut(id) else {
+            return false;
+        };
+        let Some(previous) = window.constraint.take() else {
+            return false;
+        };
+        if previous.active {
+            self.push(id, WindowEvent::CursorGrabChanged(CursorGrabMode::None));
+        }
+        true
+    }
+
+    /// Clears `id`'s constraint only when it is currently active.
+    fn release_active_constraint(&mut self, id: WindowId) -> bool {
+        if self
+            .window(id)
+            .and_then(|window| window.constraint)
+            .is_some_and(|state| state.active)
+        {
+            return self.release_constraint(id);
+        }
+        false
     }
 }
 
@@ -781,6 +1009,356 @@ mod tests {
                 WindowEvent::CloseRequested,
                 WindowEvent::Focused(false),
             ]
+        );
+    }
+
+    #[test]
+    fn relative_motion_emits_unaccelerated_delta_unscaled_by_dpi() {
+        // Scale 2.0: absolute positions are doubled, relative motion deltas are not.
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 240);
+        translator.pointer_enter(id, 10.0, 20.0);
+        translator.pointer_relative_motion(-3.5, 1.25);
+        translator.pointer_relative_motion(0.25, 0.0);
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::PointerEntered(PhysicalPosition::new(20.0, 40.0)),
+                WindowEvent::PointerRelativeMotion { dx: -3.5, dy: 1.25 },
+                WindowEvent::PointerRelativeMotion { dx: 0.25, dy: 0.0 },
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_motion_without_pointer_focus_or_invalid_values_is_ignored() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        translator.pointer_relative_motion(5.0, 5.0);
+        translator.pointer_enter(id, 0.0, 0.0);
+        drain(&mut translator);
+
+        translator.pointer_relative_motion(0.0, 0.0);
+        translator.pointer_relative_motion(f64::NAN, 1.0);
+        translator.pointer_relative_motion(1.0, f64::INFINITY);
+        translator.pointer_relative_motion(f64::NEG_INFINITY, 1.0);
+        translator.pointer_relative_motion(0.0, -2.5);
+        translator.pointer_leave(id);
+        translator.pointer_relative_motion(3.0, 3.0);
+
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::PointerRelativeMotion { dx: 0.0, dy: -2.5 },
+                WindowEvent::PointerLeft,
+            ]
+        );
+    }
+
+    #[test]
+    fn cursor_lock_and_unlock_lifecycle_and_idempotency() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+
+        // Releasing when already free is a no-op.
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::None),
+            Some(ConstraintUpdate {
+                destroy_previous: false,
+                create: None,
+            })
+        );
+        assert!(drain(&mut translator).is_empty());
+
+        // Request lock: stays None until compositor confirms activation.
+        let update = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .expect("live window");
+        assert!(!update.destroy_previous);
+        let (cid, mode) = update.create.expect("creates lock");
+        assert_eq!(mode, CursorGrabMode::Locked);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert!(drain(&mut translator).is_empty());
+
+        // Repeating the pending request is idempotent.
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::Locked),
+            Some(ConstraintUpdate {
+                destroy_previous: false,
+                create: None,
+            })
+        );
+
+        // Activation transitions active state once; duplicate activation is ignored.
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::Locked));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [WindowEvent::CursorGrabChanged(CursorGrabMode::Locked)]
+        );
+
+        // Repeating the active request is also idempotent.
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::Locked),
+            Some(ConstraintUpdate {
+                destroy_previous: false,
+                create: None,
+            })
+        );
+        assert!(drain(&mut translator).is_empty());
+
+        // Explicit unlock destroys the protocol object and emits None immediately.
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::None),
+            Some(ConstraintUpdate {
+                destroy_previous: true,
+                create: None,
+            })
+        );
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [WindowEvent::CursorGrabChanged(CursorGrabMode::None)]
+        );
+    }
+
+    #[test]
+    fn cancelling_pending_constraint_before_activation_emits_no_event() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        let update = translator
+            .request_cursor_grab(id, CursorGrabMode::Confined)
+            .expect("live window");
+        let (cid, _) = update.create.expect("creates confine");
+
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::None),
+            Some(ConstraintUpdate {
+                destroy_previous: true,
+                create: None,
+            })
+        );
+        // Late compositor activation for the cancelled constraint is ignored.
+        translator.constraint_activated(id, cid, CursorGrabMode::Confined);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert!(drain(&mut translator).is_empty());
+    }
+
+    #[test]
+    fn switching_between_locked_and_confined_replaces_constraint_and_ignores_stale_id() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        let first = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .and_then(|u| u.create)
+            .expect("creates lock")
+            .0;
+        translator.constraint_activated(id, first, CursorGrabMode::Locked);
+        drain(&mut translator);
+
+        let switch = translator
+            .request_cursor_grab(id, CursorGrabMode::Confined)
+            .expect("live window");
+        assert!(switch.destroy_previous);
+        let (second, mode) = switch.create.expect("creates confine");
+        assert_ne!(first, second);
+        assert_eq!(mode, CursorGrabMode::Confined);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+
+        // Stale events from the replaced lock are ignored.
+        assert!(!translator.constraint_deactivated(id, first));
+        translator.constraint_activated(id, first, CursorGrabMode::Locked);
+
+        translator.constraint_activated(id, second, CursorGrabMode::Confined);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::Confined));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+                WindowEvent::CursorGrabChanged(CursorGrabMode::Confined),
+            ]
+        );
+    }
+
+    #[test]
+    fn compositor_deactivation_releases_oneshot_constraint() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        let cid = translator
+            .request_cursor_grab(id, CursorGrabMode::Confined)
+            .and_then(|u| u.create)
+            .expect("creates confine")
+            .0;
+        translator.constraint_activated(id, cid, CursorGrabMode::Confined);
+        drain(&mut translator);
+
+        assert!(translator.constraint_deactivated(id, cid));
+        assert!(!translator.constraint_deactivated(id, cid));
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [WindowEvent::CursorGrabChanged(CursorGrabMode::None)]
+        );
+
+        // Requesting again creates a new constraint without destroying a defunct one.
+        let again = translator
+            .request_cursor_grab(id, CursorGrabMode::Confined)
+            .expect("live window");
+        assert!(!again.destroy_previous);
+        assert!(again.create.is_some());
+    }
+
+    #[test]
+    fn focus_loss_while_locked_or_confined_releases_constraint() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        assert_eq!(translator.keyboard_enter(id), None);
+        assert_eq!(translator.pointer_enter(id, 10.0, 10.0), None);
+        let cid = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .and_then(|u| u.create)
+            .expect("creates lock")
+            .0;
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        drain(&mut translator);
+
+        translator.pointer_relative_motion(4.0, -2.0);
+        assert!(translator.keyboard_leave(id));
+        // A subsequent compositor `unlocked` for the destroyed lock is a no-op.
+        assert!(!translator.constraint_deactivated(id, cid));
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::PointerRelativeMotion { dx: 4.0, dy: -2.0 },
+                WindowEvent::Focused(false),
+                WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+            ]
+        );
+    }
+
+    #[test]
+    fn focus_transfer_to_another_window_releases_confined_window() {
+        let mut translator = Translator::default();
+        let first = translator.add_window(LogicalSize::new(100, 100));
+        let second = translator.add_window(LogicalSize::new(100, 100));
+        translator.keyboard_enter(first);
+        let cid = translator
+            .request_cursor_grab(first, CursorGrabMode::Confined)
+            .and_then(|u| u.create)
+            .expect("creates confine")
+            .0;
+        translator.constraint_activated(first, cid, CursorGrabMode::Confined);
+        drain(&mut translator);
+
+        assert_eq!(translator.keyboard_enter(second), Some(first));
+        assert_eq!(translator.cursor_grab(first), Some(CursorGrabMode::None));
+        assert_eq!(
+            drain(&mut translator),
+            [
+                Event::Window {
+                    window: first,
+                    event: WindowEvent::Focused(false),
+                },
+                Event::Window {
+                    window: first,
+                    event: WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+                },
+                Event::Window {
+                    window: second,
+                    event: WindowEvent::Focused(true),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn compositor_unlock_before_keyboard_leave_emits_grab_change_once() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        translator.keyboard_enter(id);
+        let cid = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .and_then(|u| u.create)
+            .expect("creates lock")
+            .0;
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        drain(&mut translator);
+
+        assert!(translator.constraint_deactivated(id, cid));
+        assert!(!translator.keyboard_leave(id));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+                WindowEvent::Focused(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn pointer_leave_releases_active_constraint_but_keeps_pending_request() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        translator.keyboard_enter(id);
+        translator.pointer_enter(id, 5.0, 5.0);
+        let cid = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .and_then(|u| u.create)
+            .expect("creates lock")
+            .0;
+
+        // Pending (unactivated) constraint survives pointer leave/re-enter.
+        assert!(!translator.pointer_leave(id));
+        translator.pointer_enter(id, 5.0, 5.0);
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        drain(&mut translator);
+
+        // Active constraint is released if pointer leaves the surface.
+        assert!(translator.pointer_leave(id));
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::PointerLeft,
+                WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+            ]
+        );
+    }
+
+    #[test]
+    fn seat_capability_loss_clears_focus_and_constraints() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        translator.keyboard_enter(id);
+        translator.pointer_enter(id, 2.0, 3.0);
+        let cid = translator
+            .request_cursor_grab(id, CursorGrabMode::Locked)
+            .and_then(|u| u.create)
+            .expect("creates lock")
+            .0;
+        translator.constraint_activated(id, cid, CursorGrabMode::Locked);
+        drain(&mut translator);
+
+        translator.pointer_capability_lost();
+        assert_eq!(translator.keyboard_capability_lost(), None);
+        assert_eq!(translator.cursor_grab(id), Some(CursorGrabMode::None));
+        assert_eq!(
+            window_events(&mut translator, id),
+            [
+                WindowEvent::PointerLeft,
+                WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+                WindowEvent::Focused(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_or_removed_window_cursor_grab_queries_return_none() {
+        let (mut translator, id) = configured(LogicalSize::new(800, 600), 120);
+        let unknown = WindowId::from_raw(999);
+        assert_eq!(translator.cursor_grab(unknown), None);
+        assert_eq!(
+            translator.request_cursor_grab(unknown, CursorGrabMode::Locked),
+            None
+        );
+        translator.remove_window(id);
+        assert_eq!(translator.cursor_grab(id), None);
+        assert_eq!(
+            translator.request_cursor_grab(id, CursorGrabMode::Locked),
+            None
         );
     }
 }

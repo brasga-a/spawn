@@ -46,7 +46,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Governing Decisions
 
-- **Accepted (binding):** [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (caller-driven presentation cadence, simulation/presentation separation), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
 - **Proposed (not binding yet; do not implement contrary designs):** [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
 - **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `ash`, `raw-window-handle`, `bytemuck`, `renderdoc` (behind a feature), `gpu-allocator` (fallback only). Any other crate needs owner approval first.
 
@@ -82,7 +82,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 **Vulkan initialization and device selection:**
 
-- Instance: Vulkan 1.3; extensions `VK_KHR_surface` + `VK_KHR_wayland_surface` only, plus `VK_EXT_debug_utils` and `VK_EXT_validation_features` (synchronization validation) when the validation layer is active. `Validation` default: `IfAvailable` with debug assertions, `Disabled` otherwise.
+- Instance: Vulkan 1.3; extensions `VK_KHR_surface` + `VK_KHR_wayland_surface` only, plus `VK_EXT_debug_utils` and `VK_EXT_validation_features` (synchronization validation) when the validation layer is active. `Validation` default: `IfAvailable` with debug assertions, `Disabled` otherwise. Loader/instance setup and teardown (`Entry::load`, pre-instance enumeration, `vkCreateInstance`, `vkDestroyInstance`, `dlclose`) are serialized across threads (`LOADER_LOCK`, cold path only) so concurrent `Renderer` creation/drop cannot race inside non-thread-safe ICD global initialization.
 - Device requirements (ADR-0004, checked per GPU from the actual feature bits): API ≥ 1.3; `VK_KHR_swapchain`; `dynamicRendering`, `synchronization2`, `timelineSemaphore`, `descriptorIndexing`, `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`, `descriptorBindingVariableDescriptorCount`, `shaderSampledImageArrayNonUniformIndexing`, `descriptorBindingSampledImageUpdateAfterBind`, `descriptorBindingStorageBufferUpdateAfterBind`; one queue family with graphics and presentation; at least one surface format and present mode. All listed features are enabled at device creation. Device limits are not checked beyond the surface's image extent limits (no consumer yet).
 - Ranking: discrete > integrated > virtual > CPU, then enumeration order; no vendor preference.
 - One queue (graphics + present). No transfer or compute queues.
@@ -91,12 +91,12 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 - Format: `B8G8R8A8_SRGB`/`R8G8B8A8_SRGB` in `SRGB_NONLINEAR` (GPU encodes), else 8-bit UNORM (CPU encodes the clear color), else the first format. Present mode: preference (`Fifo` default, `Mailbox`, `Immediate`) with FIFO fallback. Images: min + 1 within max. Usage: color attachment only. Composite alpha: opaque when supported.
 - Two frames in flight. One timeline semaphore counts submissions; a frame slot is reused only after the timeline reaches its last value (5 s limit → `REND-0007`). Per slot: transient command pool, one command buffer, one binary acquire semaphore. Per swapchain image: one binary present semaphore.
-- Commands: synchronization2 barrier `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, dynamic rendering with `LOAD_OP_CLEAR`, barrier to `PRESENT_SRC_KHR`; `vkQueueSubmit2` waits the acquire semaphore at color-attachment output and signals the present semaphore and the timeline.
+- Commands: synchronization2 barrier `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, dynamic rendering with `LOAD_OP_CLEAR`, barrier to `PRESENT_SRC_KHR` (`dstStageMask = NONE`); `vkQueueSubmit2` waits the acquire semaphore at color-attachment output and signals both the present semaphore and the timeline at `ALL_COMMANDS` (ordering presentation after the layout transition).
 - No memory allocation: swapchain images are the only images (the in-house allocator of ADR-0004 waits for its first consumer).
 
 **Resize, suspension and recovery** (presentation controller):
 
-- `resize(size)` only records the size. Zero → `Suspended`: no acquire, no present, `render_clear` returns `FrameOutcome::Suspended` (the caller should wait for events). A different non-zero size → swapchain recreated at the next frame, once, for the last size.
+- `resize(size)` only records the size (idempotent for unchanged sizes, even when the surface clamps or dictates a different swapchain extent). Zero → `Suspended`: no acquire, no present, `render_clear` returns `FrameOutcome::Suspended` (the caller should wait for events). A different non-zero size → swapchain recreated at the next frame, once, for the last size.
 - A surface reporting a zero current extent also suspends until the next non-zero `resize`.
 - `VK_ERROR_OUT_OF_DATE_KHR` (acquire or present) → frame `Skipped`, recreation next frame. `VK_SUBOPTIMAL_KHR` → frame presented, recreation next frame. `VK_TIMEOUT`/`VK_NOT_READY` (100 ms acquire timeout) → `Skipped`, no recovery. `VK_ERROR_SURFACE_LOST_KHR` → surface recreated from the stored handles, then the swapchain.
 - Bounds: 3 consecutive failed recreations, or 16 consecutive recoveries without a presented frame → `REND-0006` (fatal). At most one recreation and one acquire per `render_clear` call, so no call spins.
@@ -108,14 +108,13 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 **Tests:**
 
-- Headless, always run (CI): 34 unit tests without the feature: errors (2), types (4), presentation controller (17, including FND-T06 and FND-T07), selection (11). With `vulkan`: +1 (validation sink bounds).
-- GPU, opt-in (`cargo test -p spawn-render --features vulkan -- --ignored`, needs a Vulkan 1.3 GPU with `VK_EXT_headless_surface`): 120 presented frames; resize to zero (suspended, no acquire) and back to four sizes with matching swapchain extents; start suspended and create/drop three times; each asserts zero validation errors. Last run: all 3 pass on the reference hardware (validation layer not installed, so not exercised).
+- Headless, always run (CI): 35 unit tests without the feature: errors (2), types (4), presentation controller (18, including FND-T06 and FND-T07), selection (11). With `vulkan`: +2 (validation sink bounds, `VkFailure` classification).
+- GPU, opt-in (`cargo test -p spawn-render --features vulkan -- --ignored`, needs a Vulkan 1.3 GPU with `VK_EXT_headless_surface`): 120 presented frames; present-mode preferences (`Fifo`, `Mailbox`, `Immediate`); resize to zero (suspended, no acquire) and back to four sizes with matching swapchain extents; start suspended and create/drop three times; each asserts zero validation errors. All 4 pass on the reference hardware with `VK_LAYER_KHRONOS_validation` 1.4.363 and `VK_EXT_validation_features` synchronization validation active.
 
-**Manual smoke test:** `examples/vulkan_clear.rs` in the root package (the composition root may depend on both `spawn-platform` and `spawn-render`; this crate must not). Records: [VERIFICATION](../../docs/foundation/VERIFICATION.md#recorded-smoke-runs).
+**Manual smoke test:** `examples/vulkan_clear.rs` in the root package (the composition root may depend on both `spawn-platform` and `spawn-render`; this crate must not); drains trailing validation messages on exit and returns a non-zero exit code on validation errors. Records: [VERIFICATION](../../docs/foundation/VERIFICATION.md#recorded-smoke-runs).
 
 **Not implemented / deferred:**
 
-- Validation-layer evidence: the Khronos layer is not installed on the reference machine, so no run has validation enabled yet (pending owner).
 - X11, Win32 and other surfaces (`REND-0002`); Windows is not claimed.
 - Separate graphics/present queue families (rejected with a reason), async compute, transfer queues.
 - Device-loss recovery (fatal by design for the foundation), HDR/wide-gamut color spaces, `VK_EXT_swapchain_maintenance1`.

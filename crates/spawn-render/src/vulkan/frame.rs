@@ -10,7 +10,8 @@
 //!   presentation engine, waited by the submission at color-attachment
 //!   output).
 //! - Each swapchain image has a binary **present semaphore** (signaled by the
-//!   submission, waited by presentation); see `Swapchain`.
+//!   submission at `ALL_COMMANDS` after the present layout transition, waited
+//!   by presentation); see `Swapchain`.
 //! - Layout transitions use synchronization2 barriers:
 //!   `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` before dynamic rendering clears
 //!   the image, `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR` after it.
@@ -165,7 +166,8 @@ impl Frames {
         let to_present = [vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
             .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            // Presentation is ordered by the present semaphore, not by a stage.
+            // Ordered before presentation by the present semaphore signal at
+            // `ALL_COMMANDS`, which includes prior layout transitions.
             .dst_stage_mask(vk::PipelineStageFlags2::NONE)
             .dst_access_mask(vk::AccessFlags2::NONE)
             .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -207,9 +209,12 @@ impl Frames {
             .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)];
         let commands = [vk::CommandBufferSubmitInfo::default().command_buffer(slot.commands)];
         let signals = [
+            // `ALL_COMMANDS` (not `COLOR_ATTACHMENT_OUTPUT`) so the semaphore
+            // signal orders after the `to_present` layout transition barrier
+            // whose `dst_stage_mask` is `NONE`.
             vk::SemaphoreSubmitInfo::default()
                 .semaphore(present)
-                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT),
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
             vk::SemaphoreSubmitInfo::default()
                 .semaphore(self.timeline)
                 .value(value)

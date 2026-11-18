@@ -3,9 +3,10 @@
 //! Always available (no native code, ADR-0002):
 //!
 //! - Raw events: [`Event`], [`WindowEvent`], [`KeyEvent`], [`KeyCode`],
-//!   [`MouseButton`], [`ScrollDelta`], [`ElementState`] and the size/position
-//!   types. They describe what the window system reported, in order; they
-//!   carry no actions or bindings (`spawn-input` builds those).
+//!   [`MouseButton`], [`ScrollDelta`], [`ElementState`], [`CursorGrabMode`]
+//!   and the size/position types. They describe what the window system
+//!   reported, in order; they carry no actions or bindings (`spawn-input`
+//!   builds those).
 //! - [`WindowDescriptor`] and the located, coded [`PlatformError`] (ADR-0009).
 //!
 //! With the `wayland` Cargo feature on Linux, the native backend adds
@@ -26,8 +27,8 @@ mod window;
 
 pub use error::{PlatformError, PlatformErrorKind};
 pub use event::{
-    ElementState, Event, KeyEvent, LogicalSize, PhysicalPosition, PhysicalSize, ScrollDelta,
-    WindowEvent, WindowId,
+    CursorGrabMode, ElementState, Event, KeyEvent, LogicalSize, PhysicalPosition, PhysicalSize,
+    ScrollDelta, WindowEvent, WindowId,
 };
 pub use key::{KeyCode, MouseButton};
 #[cfg(all(feature = "wayland", target_os = "linux"))]

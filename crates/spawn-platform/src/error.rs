@@ -24,6 +24,10 @@ pub enum PlatformErrorKind {
     InvalidWindowSize,
     /// `PLAT-0005`: the display server did not answer within the time limit.
     Timeout,
+    /// `PLAT-0006`: cursor lock or confinement could not be applied (the
+    /// display server lacks the protocol, no pointer device is available, the
+    /// window was destroyed, or the server rejected the request).
+    CursorGrabFailed,
 }
 
 impl PlatformErrorKind {
@@ -35,6 +39,7 @@ impl PlatformErrorKind {
             Self::ConnectionLost => "PLAT-0003",
             Self::InvalidWindowSize => "PLAT-0004",
             Self::Timeout => "PLAT-0005",
+            Self::CursorGrabFailed => "PLAT-0006",
         }
     }
 
@@ -48,6 +53,7 @@ impl PlatformErrorKind {
                 "window size must be non-zero and within the supported maximum"
             }
             Self::Timeout => "the display server did not respond in time",
+            Self::CursorGrabFailed => "the window system could not lock or confine the cursor",
         }
     }
 }
@@ -214,6 +220,7 @@ mod tests {
             PlatformErrorKind::ConnectionLost,
             PlatformErrorKind::InvalidWindowSize,
             PlatformErrorKind::Timeout,
+            PlatformErrorKind::CursorGrabFailed,
         ];
         let codes: Vec<_> = kinds.iter().map(|kind| kind.code()).collect();
         assert_eq!(
@@ -223,7 +230,8 @@ mod tests {
                 "PLAT-0002",
                 "PLAT-0003",
                 "PLAT-0004",
-                "PLAT-0005"
+                "PLAT-0005",
+                "PLAT-0006",
             ]
         );
     }
@@ -259,5 +267,20 @@ mod tests {
         // Only a backtrace (when enabled through the environment) may follow.
         assert!(lines.next().is_none_or(|line| line == "backtrace:"));
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn cursor_grab_failed_report_carries_code_location_and_detail() {
+        let error = PlatformError::new(PlatformErrorKind::CursorGrabFailed)
+            .with_detail("Wayland global `zwp_pointer_constraints_v1` is not available");
+        let line = line!() - 2;
+        let report = error.to_string();
+        let expected_head = format!(
+            "error[PLAT-0006]: the window system could not lock or confine the cursor\n  --> {}:{line}:21\n   = detail: Wayland global `zwp_pointer_constraints_v1` is not available",
+            file!()
+        );
+        assert!(report.starts_with(&expected_head), "report was:\n{report}");
+        assert_eq!(error.kind(), PlatformErrorKind::CursorGrabFailed);
+        assert_eq!(error.code(), "PLAT-0006");
     }
 }

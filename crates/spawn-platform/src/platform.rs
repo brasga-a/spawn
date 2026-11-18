@@ -7,7 +7,7 @@ use raw_window_handle::{
 };
 
 use crate::error::PlatformError;
-use crate::event::{Event, PhysicalSize, WindowId};
+use crate::event::{CursorGrabMode, Event, PhysicalSize, WindowId};
 use crate::linux::wayland::{WaylandPlatform, WaylandWindow};
 use crate::window::WindowDescriptor;
 
@@ -110,6 +110,38 @@ impl Platform {
         self.backend
             .metrics(window)
             .map(|metrics| metrics.scale_factor())
+    }
+
+    /// Requests a cursor constraint (`None`, `Confined` or `Locked`) for a live
+    /// window.
+    ///
+    /// Constraints may take effect asynchronously once the window system
+    /// activates them; [`WindowEvent::CursorGrabChanged`](crate::WindowEvent::CursorGrabChanged)
+    /// reports every change to the active mode, and [`Platform::cursor_grab`]
+    /// returns the currently active mode. Focus loss or compositor intervention
+    /// releases an active or pending constraint back to
+    /// [`CursorGrabMode::None`]. Repeating the current request is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// - `PLAT-0006` [`CursorGrabFailed`](crate::PlatformErrorKind::CursorGrabFailed):
+    ///   `window` is unknown or destroyed, or a non-`None` constraint was
+    ///   requested when the display server lacks pointer-constraint or
+    ///   relative-pointer support or has no pointer device.
+    /// - `PLAT-0003` [`ConnectionLost`](crate::PlatformErrorKind::ConnectionLost):
+    ///   sending the request to the display server failed.
+    pub fn set_cursor_grab(
+        &mut self,
+        window: WindowId,
+        mode: CursorGrabMode,
+    ) -> Result<(), PlatformError> {
+        self.backend.set_cursor_grab(window, mode)
+    }
+
+    /// Currently active cursor constraint of a live window, or `None` for a
+    /// destroyed or unknown window.
+    pub fn cursor_grab(&self, window: WindowId) -> Option<CursorGrabMode> {
+        self.backend.cursor_grab(window)
     }
 }
 

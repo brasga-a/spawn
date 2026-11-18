@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_void};
+use std::mem::ManuallyDrop;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,6 +14,15 @@ use crate::types::{Validation, ValidationMessage, ValidationSeverity};
 use crate::vulkan::vk_error;
 
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
+
+/// Serializes Vulkan loader instance setup and teardown (`Entry::load`,
+/// `vkEnumerateInstance*`, `vkCreateInstance`, `vkDestroyInstance`). When zero
+/// `VkInstance`s are live, the Vulkan loader `dlopen`s/`dlclose`s installed
+/// ICDs on each pre-instance query; some Linux ICDs (`libGLX_nvidia.so.0`)
+/// race in `vk_icdNegotiateLoaderICDInterfaceVersion` if two threads probe the
+/// loader simultaneously (for example in parallel GPU tests). Cold startup and
+/// shutdown path only; never acquired per frame.
+static LOADER_LOCK: Mutex<()> = Mutex::new(());
 
 /// Messages kept between drains; older ones are counted as dropped.
 const VALIDATION_CAPACITY: usize = 256;
@@ -119,7 +129,7 @@ struct Messenger {
 /// Owns the loader, the instance and the validation messenger.
 /// Dropped last: everything else is created from it.
 pub(crate) struct InstanceOwner {
-    pub entry: ash::Entry,
+    pub entry: ManuallyDrop<ash::Entry>,
     pub instance: ash::Instance,
     messenger: Option<Messenger>,
     /// Debug-utils is enabled (object names, validation messages).
@@ -132,8 +142,12 @@ impl InstanceOwner {
         surface: SurfaceExtension,
         validation: Validation,
     ) -> Result<Self, RenderError> {
+        let _guard = LOADER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: loading the system Vulkan loader runs its initialization;
-        // no Vulkan object exists yet that it could invalidate.
+        // serialized by `LOADER_LOCK` so concurrent callers cannot race inside
+        // loader/ICD global initialization.
         let entry = unsafe { ash::Entry::load() }.map_err(|error| {
             RenderError::new(RenderErrorKind::VulkanUnavailable)
                 .with_detail("loading the Vulkan loader (libvulkan.so.1)")
@@ -232,9 +246,12 @@ impl InstanceOwner {
                 .with_detail("vkCreateInstance")
                 .with_cause(&result)
         })?;
+        // Release before constructing `Self` so an error in `create_messenger`
+        // can drop `Self` without re-locking `LOADER_LOCK` on this thread.
+        drop(_guard);
 
         let mut owner = Self {
-            entry,
+            entry: ManuallyDrop::new(entry),
             instance,
             messenger: None,
             debug_utils,
@@ -281,6 +298,9 @@ impl InstanceOwner {
 
 impl Drop for InstanceOwner {
     fn drop(&mut self) {
+        let _guard = LOADER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(messenger) = self.messenger.take() {
             // SAFETY: the messenger belongs to this instance and is destroyed
             // once, before the instance.
@@ -294,6 +314,10 @@ impl Drop for InstanceOwner {
         // are dropped before this one (field order of `VulkanRenderer`, or
         // reverse local order during construction).
         unsafe { self.instance.destroy_instance(None) };
+        // SAFETY: the instance and messenger were destroyed above; `entry` is
+        // dropped once here while `_guard` is held so `dlclose` cannot race
+        // with concurrent `Entry::load` / pre-instance ICD queries.
+        unsafe { ManuallyDrop::drop(&mut self.entry) };
     }
 }
 
