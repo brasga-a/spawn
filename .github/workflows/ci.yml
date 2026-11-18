@@ -47,3 +47,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Gate G2 coverage-guided fuzzing of the untrusted cooked-shader parser.
+  # Owner-approved ADR-0007 exception: nightly is used ONLY in this job, only for
+  # the standalone fuzz package; it never builds, lints or tests the engine.
+  fuzz:
+    name: Fuzz (nightly cargo-fuzz + ASan, cooked-shader parser)
+    runs-on: ubuntu-latest
+    env:
+      FUZZ_SECONDS: 300
+    defaults:
+      run:
+        working-directory: crates/spawn-render/fuzz
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo +nightly install cargo-fuzz --locked
+      # Seeds are generated, never committed (SPN-INV-084).
+      - name: Generate seed corpus
+        run: cargo +nightly run --example seed_corpus -- corpus/decode_cooked_shader
+      - name: Fuzz decode_cooked_shader
+        run: >
+          cargo +nightly fuzz run --sanitizer address decode_cooked_shader
+          corpus/decode_cooked_shader --
+          -max_total_time=${FUZZ_SECONDS} -rss_limit_mb=2048 -max_len=65536
+          -print_final_stats=1
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: crates/spawn-render/fuzz/artifacts
+      - name: Licenses and advisories (fuzz package)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/spawn-render/fuzz/Cargo.toml

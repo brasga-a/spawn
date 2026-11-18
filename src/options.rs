@@ -2,15 +2,17 @@
 
 #![forbid(unsafe_code)]
 
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use spawn_core::FixedStepConfig;
 use spawn_platform::{CursorGrabMode, LogicalSize};
-use spawn_render::{ClearColor, PresentModePreference, Validation};
+use spawn_render::{ClearColor, MAX_COOKED_SHADER_BYTES, PresentModePreference, Validation};
 
 use crate::camera::FreeCameraConfig;
-use crate::error::{EngineError, EngineErrorKind};
+use crate::error::{EngineError, EngineErrorKind, SHADER_COOK_HINT};
 
 /// Longest bounded smoke duration accepted from `SPAWN_SMOKE_SECONDS` (24 h).
 const MAX_SMOKE_SECONDS: f64 = 86_400.0;
@@ -142,6 +144,66 @@ pub(crate) fn validate_shader_dir_path(shader_dir: &Path) -> Result<(), EngineEr
     Ok(())
 }
 
+/// Reads an offline-cooked `.spnshdr` artifact at `path` as untrusted input,
+/// enforcing [`MAX_COOKED_SHADER_BYTES`] **before** allocating its contents
+/// (`F3D-INV-12`, `SPN-INV-034`).
+///
+/// Rejects non-regular files (directories, FIFOs, character devices such as
+/// `/dev/zero`, including through symlinks) and files whose metadata size
+/// exceeds the cap, then reads at most `MAX_COOKED_SHADER_BYTES + 1` bytes so a
+/// file growing during the read is still rejected without unbounded allocation.
+///
+/// # Errors
+///
+/// Returns [`EngineErrorKind::Shader`] (`ENGN-0008`) naming the file, the
+/// shader `stage`, and the reason, with [`SHADER_COOK_HINT`] when the file
+/// cannot be opened or read.
+#[track_caller]
+pub(crate) fn read_cooked_shader_bounded(path: &Path, stage: &str) -> Result<Vec<u8>, EngineError> {
+    let read_failure = |err: &std::io::Error| {
+        EngineError::new(EngineErrorKind::Shader)
+            .with_detail(format!(
+                "file `{}` (stage `{stage}`): failed to read cooked shader artifact; {SHADER_COOK_HINT}",
+                path.display()
+            ))
+            .with_cause(err)
+    };
+    let too_large = |len: u64| {
+        EngineError::new(EngineErrorKind::Shader).with_detail(format!(
+            "file `{}` (stage `{stage}`): field `size`: {len} bytes exceeds maximum \
+             {MAX_COOKED_SHADER_BYTES} bytes for a cooked shader artifact",
+            path.display()
+        ))
+    };
+
+    let file = File::open(path).map_err(|err| read_failure(&err))?;
+    let metadata = file.metadata().map_err(|err| read_failure(&err))?;
+    if !metadata.is_file() {
+        return Err(
+            EngineError::new(EngineErrorKind::Shader).with_detail(format!(
+                "file `{}` (stage `{stage}`): field `kind`: cooked shader artifact must be a \
+                 regular file",
+                path.display()
+            )),
+        );
+    }
+    let max_bytes = u64::try_from(MAX_COOKED_SHADER_BYTES).unwrap_or(u64::MAX);
+    if metadata.len() > max_bytes {
+        return Err(too_large(metadata.len()));
+    }
+
+    // `metadata.len() <= MAX_COOKED_SHADER_BYTES`, so the capacity is bounded.
+    let capacity = usize::try_from(metadata.len()).unwrap_or(MAX_COOKED_SHADER_BYTES);
+    let mut bytes = Vec::with_capacity(capacity.min(MAX_COOKED_SHADER_BYTES));
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| read_failure(&err))?;
+    if bytes.len() > MAX_COOKED_SHADER_BYTES {
+        return Err(too_large(u64::try_from(bytes.len()).unwrap_or(u64::MAX)));
+    }
+    Ok(bytes)
+}
+
 fn read_optional_env(name: &'static str) -> Result<Option<String>, EngineError> {
     match std::env::var(name) {
         Ok(value) => Ok(Some(value)),
@@ -224,6 +286,76 @@ mod tests {
 
         let none = RuntimeOptions::from_env_values(None, Some("none")).unwrap();
         assert_eq!(none.smoke_cursor_grab, Some(CursorGrabMode::None));
+    }
+
+    /// Unique per-test scratch directory under `std::env::temp_dir()`
+    /// (`tempfile` is not an approved dependency).
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "spawn_engine_bounded_read_{name}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn read_cooked_shader_bounded_rejects_oversized_artifact_before_reading() {
+        let dir = scratch_dir("oversized");
+        let path = dir.join("mesh_3d.vs_main.spnshdr");
+        // Sparse file: no data is written, so a correct implementation rejects it
+        // from metadata without allocating `MAX_COOKED_SHADER_BYTES + 1` bytes.
+        let file = File::create(&path).unwrap();
+        file.set_len(MAX_COOKED_SHADER_BYTES as u64 + 1).unwrap();
+        drop(file);
+
+        let err = read_cooked_shader_bounded(&path, "vertex").unwrap_err();
+        assert_eq!(err.kind(), EngineErrorKind::Shader);
+        assert_eq!(err.code(), "ENGN-0008");
+        let report = err.to_string();
+        assert!(report.contains("exceeds maximum"), "{report}");
+        assert!(report.contains("stage `vertex`"), "{report}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_cooked_shader_bounded_accepts_artifact_at_exact_cap() {
+        let dir = scratch_dir("exact_cap");
+        let path = dir.join("mesh_3d.fs_main.spnshdr");
+        let file = File::create(&path).unwrap();
+        file.set_len(MAX_COOKED_SHADER_BYTES as u64).unwrap();
+        drop(file);
+
+        let bytes = read_cooked_shader_bounded(&path, "fragment").unwrap();
+        assert_eq!(bytes.len(), MAX_COOKED_SHADER_BYTES);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_cooked_shader_bounded_rejects_non_regular_and_missing_files() {
+        let dir = scratch_dir("non_regular");
+        let as_dir = dir.join("mesh_3d.vs_main.spnshdr");
+        std::fs::create_dir_all(&as_dir).unwrap();
+        // Opening a directory may fail (Windows) or succeed with `is_file() == false`
+        // (Linux); either way it must be a located `ENGN-0008`, never a read.
+        let err = read_cooked_shader_bounded(&as_dir, "vertex").unwrap_err();
+        assert_eq!(err.code(), "ENGN-0008");
+
+        let missing = dir.join("does_not_exist.spnshdr");
+        let err = read_cooked_shader_bounded(&missing, "fragment").unwrap_err();
+        assert_eq!(err.code(), "ENGN-0008");
+        assert!(err.to_string().contains(SHADER_COOK_HINT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_cooked_shader_bounded_rejects_character_device_without_reading() {
+        // `/dev/zero` never reaches EOF; an unbounded `fs::read` would grow forever.
+        let err = read_cooked_shader_bounded(Path::new("/dev/zero"), "vertex").unwrap_err();
+        assert_eq!(err.code(), "ENGN-0008");
+        assert!(err.to_string().contains("regular file"));
     }
 
     #[test]

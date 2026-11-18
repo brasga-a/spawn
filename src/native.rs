@@ -42,7 +42,6 @@ pub(crate) fn unsupported_platform_error(os: &str) -> EngineError {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::fs;
     use std::path::Path;
     use std::time::{Duration, Instant};
 
@@ -59,8 +58,8 @@ mod linux {
     };
 
     use crate::camera::FreeCameraPose;
-    use crate::error::{EngineError, EngineErrorKind, SHADER_COOK_HINT};
-    use crate::options::RuntimeOptions;
+    use crate::error::{EngineError, EngineErrorKind};
+    use crate::options::{RuntimeOptions, read_cooked_shader_bounded};
     use crate::runtime::{
         RenderSurface, RuntimeBackend, SessionSummary, WindowSurface, run_session,
     };
@@ -309,14 +308,7 @@ mod linux {
                 MESH_3D_FS_ARTIFACT => "fragment",
                 _ => "shader",
             };
-            fs::read(&path).map_err(|err| {
-                EngineError::new(EngineErrorKind::Shader)
-                    .with_detail(format!(
-                        "file `{}` (stage `{stage}`): failed to read cooked shader artifact; {SHADER_COOK_HINT}",
-                        path.display()
-                    ))
-                    .with_cause(&err)
-            })
+            read_cooked_shader_bounded(&path, stage)
         }
 
         fn on_scene_initialized(

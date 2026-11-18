@@ -3,12 +3,15 @@
 //! `FND-INV-05`, `FND-INV-06`, `FND-INV-08`).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
+
+#[path = "common/graph.rs"]
+mod graph;
 
 use spawn_core::{FixedStepConfig, Tick};
 use spawn_engine::{
@@ -866,36 +869,15 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
         String::from_utf8_lossy(&metadata_output.stderr)
     );
 
-    // 2. Parse every Cargo.toml in `.`, `crates/*`, and `tools/*` to verify
-    //    layering rules and acyclicity across all workspace packages.
-    let mut manifests = vec![root.join("Cargo.toml")];
-    for group in ["crates", "tools"] {
-        for entry in fs::read_dir(root.join(group))? {
-            let path = entry?.path().join("Cargo.toml");
-            if path.is_file() {
-                manifests.push(path);
-            }
-        }
-    }
-
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut engine_crates = BTreeSet::new();
-    let mut tool_crates = BTreeSet::new();
-
-    for manifest in &manifests {
-        let content = fs::read_to_string(manifest)?;
-        let (pkg_name, deps) = parse_manifest_spawn_deps(&content);
-        let rel = manifest.strip_prefix(&root).unwrap_or(manifest);
-        if rel.starts_with("crates") {
-            engine_crates.insert(pkg_name.clone());
-        } else if rel.starts_with("tools") {
-            tool_crates.insert(pkg_name.clone());
-        }
-        edges.insert(pkg_name, deps);
-    }
+    // 2. Resolve every workspace package's direct `spawn-*` edges through Cargo's
+    //    own resolver (`cargo tree --invert`; normal + build, all targets), so
+    //    table-header, renamed, build-only, and target-specific dependencies are
+    //    all covered (SPN-INV-001, SPN-INV-002).
+    let graph = graph::resolved_workspace_graph(&root)?;
+    let edges = &graph.edges;
 
     // Engine crates never depend on root `spawn-engine` or any `tools/*` crate (SPN-INV-001).
-    assert_no_upward_edges(&engine_crates, &tool_crates, &edges)?;
+    graph::assert_no_upward_edges(&graph)?;
 
     // Specific foundation boundary invariants (FND-INV-01, FND-INV-02, SPN-INV-004..006).
     assert!(
@@ -926,7 +908,7 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
     );
 
     // Topological sort (Kahn's algorithm) proves the entire workspace graph is acyclic (SPN-INV-002).
-    assert_acyclic(&edges);
+    graph::assert_acyclic(edges);
 
     // 3. `cargo tree -e normal` verifies headless crates pull zero window/GPU backends (FND-INV-03, SPN-INV-009).
     let core_tree = cargo_tree(&root, &["-p", "spawn-core", "-e", "normal"])?;
@@ -1088,27 +1070,6 @@ fn check_tree_forbids(tree: &str, context: &str, forbidden: &[&str]) -> Result<(
     Ok(())
 }
 
-fn assert_no_upward_edges(
-    engine_crates: &BTreeSet<String>,
-    tool_crates: &BTreeSet<String>,
-    edges: &BTreeMap<String, BTreeSet<String>>,
-) -> Result<(), String> {
-    for crate_name in engine_crates {
-        let deps = &edges[crate_name];
-        if deps.contains("spawn-engine") {
-            return Err(format!(
-                "{crate_name} must not depend on composition root spawn-engine"
-            ));
-        }
-        for tool in tool_crates {
-            if deps.contains(tool) {
-                return Err(format!("{crate_name} must not depend on tool crate {tool}"));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[test]
 fn cargo_tree_parser_handles_ansi_color_and_detects_forbidden_edges()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -1183,89 +1144,76 @@ fn cargo_tree_parser_handles_ansi_color_and_detects_forbidden_edges()
         assert!(err.contains(forbidden), "unexpected error text: {err}");
     }
 
-    // 4. Upward manifest edge (`spawn-render -> spawn-engine` or `spawn-cli`) fails explicitly.
-    let engine_crates = BTreeSet::from(["spawn-render".to_owned()]);
-    let tool_crates = BTreeSet::from(["spawn-cli".to_owned()]);
-    let mut bad_edges = BTreeMap::new();
-    bad_edges.insert(
-        "spawn-render".to_owned(),
-        BTreeSet::from(["spawn-engine".to_owned()]),
-    );
-    assert!(assert_no_upward_edges(&engine_crates, &tool_crates, &bad_edges).is_err());
-    bad_edges.insert(
-        "spawn-render".to_owned(),
-        BTreeSet::from(["spawn-cli".to_owned()]),
-    );
-    assert!(assert_no_upward_edges(&engine_crates, &tool_crates, &bad_edges).is_err());
-
     Ok(())
 }
 
-fn parse_manifest_spawn_deps(content: &str) -> (String, BTreeSet<String>) {
-    let mut section = "";
-    let mut name = String::new();
-    let mut deps = BTreeSet::new();
+/// Regression for the audit finding that hand-parsed manifests missed valid
+/// Cargo forms. Each form below resolves, in `cargo tree --invert` output, to
+/// a plain dependent line, so the resolver-based graph must flag all of them.
+#[test]
+fn resolver_graph_detects_table_header_renamed_and_build_only_upward_edges() {
+    // Synthetic `cargo tree --workspace -i <target> --depth 1 --prefix none` outputs
+    // for an engine crate (`spawn-ecs`) declaring an upward edge as:
+    //   [dependencies.spawn-engine]                       (table header)
+    //   engine = { package = "spawn-engine", path = .. }  (renamed)
+    //   [build-dependencies] spawn-cli = { path = .. }     (build-only)
+    let cases = [
+        (
+            "table-header",
+            "spawn-engine",
+            "spawn-engine v0.1.0 (/repo)\nspawn-ecs v0.1.0 (/repo/crates/spawn-ecs)\n",
+        ),
+        (
+            "renamed",
+            "spawn-engine",
+            "spawn-engine v0.1.0 (/repo)\nspawn-ecs v0.1.0 (/repo/crates/spawn-ecs)\n",
+        ),
+        (
+            "build-only",
+            "spawn-cli",
+            "spawn-cli v0.1.0 (/repo/tools/spawn-cli)\nspawn-ecs v0.1.0 (/repo/crates/spawn-ecs)\n",
+        ),
+    ];
+    for (label, target, inverted) in cases {
+        let mut graph = graph::WorkspaceGraph {
+            edges: ["spawn-ecs", "spawn-engine", "spawn-cli"]
+                .into_iter()
+                .map(|name| (name.to_owned(), BTreeSet::new()))
+                .collect(),
+            engine_crates: BTreeSet::from(["spawn-ecs".to_owned()]),
+            tool_crates: BTreeSet::from(["spawn-cli".to_owned()]),
+        };
+        graph::add_inverted_tree_edges(&mut graph.edges, target, inverted);
+        assert_eq!(
+            graph.edges["spawn-ecs"],
+            BTreeSet::from([target.to_owned()]),
+            "{label}: dependent edge must be recorded"
+        );
+        let err = graph::assert_no_upward_edges(&graph).unwrap_err();
+        assert!(
+            err.contains(target),
+            "{label}: unexpected error text: {err}"
+        );
+    }
 
-    for raw_line in content.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            section = &line[1..line.len() - 1];
-            continue;
-        }
-        if section == "package"
-            && let Some(rest) = line.strip_prefix("name")
-            && let Some((_, rhs)) = rest.split_once('=')
-        {
-            name = rhs.trim().trim_matches('"').to_owned();
-        } else if (section == "dependencies" || section.ends_with(".dependencies"))
-            && !section.contains("dev-dependencies")
-            && let Some((dep_key, _)) = line.split_once('=')
-        {
-            let dep = dep_key.trim().trim_matches('"');
-            if dep.starts_with("spawn-") {
-                deps.insert(dep.to_owned());
-            }
-        }
-    }
-    assert!(!name.is_empty(), "manifest missing [package] name");
-    (name, deps)
-}
-
-fn assert_acyclic(edges: &BTreeMap<String, BTreeSet<String>>) {
-    let mut in_degree: BTreeMap<&str, usize> =
-        edges.keys().map(|node| (node.as_str(), 0)).collect();
-    for targets in edges.values() {
-        for target in targets {
-            if let Some(deg) = in_degree.get_mut(target.as_str()) {
-                *deg += 1;
-            }
-        }
-    }
-    let mut queue: VecDeque<&str> = in_degree
-        .iter()
-        .filter_map(|(&node, &deg)| (deg == 0).then_some(node))
-        .collect();
-    let mut visited = 0;
-    while let Some(node) = queue.pop_front() {
-        visited += 1;
-        if let Some(targets) = edges.get(node) {
-            for target in targets {
-                if let Some(deg) = in_degree.get_mut(target.as_str()) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(target.as_str());
-                    }
-                }
-            }
-        }
-    }
+    // Allowed downward edges and non-workspace names are not violations.
+    let mut graph = graph::WorkspaceGraph {
+        edges: ["spawn-render", "spawn-math", "spawn-cli", "spawn-engine"]
+            .into_iter()
+            .map(|name| (name.to_owned(), BTreeSet::new()))
+            .collect(),
+        engine_crates: BTreeSet::from(["spawn-render".to_owned(), "spawn-math".to_owned()]),
+        tool_crates: BTreeSet::from(["spawn-cli".to_owned()]),
+    };
+    graph::add_inverted_tree_edges(
+        &mut graph.edges,
+        "spawn-math",
+        "spawn-math v0.1.0 (/repo/crates/spawn-math)\nspawn-render v0.1.0 (/repo/crates/spawn-render)\nexternal-crate v1.0.0\n",
+    );
+    assert!(graph::assert_no_upward_edges(&graph).is_ok());
     assert_eq!(
-        visited,
-        edges.len(),
-        "cycle detected in workspace spawn-* dependency graph: {edges:?}"
+        graph.edges["spawn-render"],
+        BTreeSet::from(["spawn-math".to_owned()])
     );
 }
 

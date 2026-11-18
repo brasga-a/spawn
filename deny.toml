@@ -27,6 +27,12 @@ confidence-threshold = 0.9
 # The allowlist is policy, not a list of licenses currently in use.
 unused-allowed-license = "allow"
 
+# libFuzzer (LLVM) is NCSA-licensed: permissive (ADR-0008), test-only, and linked
+# solely into the standalone Gate G2 fuzz workspace `crates/spawn-render/fuzz`.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

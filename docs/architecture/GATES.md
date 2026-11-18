@@ -56,7 +56,7 @@ Apply each block whose trigger matches.
 ### Untrusted-input parser (packets, files, assets, packages, script values)
 - [ ] Sizes and nesting bounded before allocation (SPN-INV-034).
 - [ ] `clippy::indexing_slicing` denied in the module.
-- [ ] Fuzz target added and run.
+- [ ] Fuzz target added and run with coverage instrumentation (`cargo fuzz run`, ASan); for `crates/spawn-render/fuzz` this is the CI job `fuzz`. An uninstrumented run is not fuzzing evidence.
 
 ### Simulation code used in prediction
 - [ ] Uses only the deterministic math subset (SPN-INV-044).

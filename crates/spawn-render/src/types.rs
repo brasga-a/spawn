@@ -106,7 +106,9 @@ pub enum Validation {
     /// Enable it when the layer is installed; continue without it otherwise
     /// ([`crate::RendererInfo::validation_enabled`] reports which).
     IfAvailable,
-    /// Fail with `REND-0008` when the layer is not installed.
+    /// Fail with `REND-0008` when the layer is not installed, or when it cannot
+    /// report messages (`VK_EXT_debug_utils`) or run synchronization validation
+    /// (`VK_EXT_validation_features`).
     Required,
 }
 
@@ -216,6 +218,9 @@ pub struct RendererInfo {
     pub driver: String,
     /// Whether the Khronos validation layer is active.
     pub validation_enabled: bool,
+    /// Whether Khronos synchronization validation (`VK_EXT_validation_features`)
+    /// is active alongside the validation layer.
+    pub sync_validation_enabled: bool,
 }
 
 /// Color target family a graphics pipeline renders into.

@@ -390,6 +390,10 @@ fn f3d_t11_offscreen_triangle_readback_culling_swapchain_resize_and_leak_free_sh
         renderer.info().validation_enabled,
         "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
     );
+    assert!(
+        renderer.info().sync_validation_enabled,
+        "Khronos synchronization validation must be active for opt-in GPU verification"
+    );
 
     let vs_ccw_bytes = encode_triangle_vs(false, 0.5).unwrap();
     let vs_cw_bytes = encode_triangle_vs(true, 0.5).unwrap();

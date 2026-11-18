@@ -970,6 +970,10 @@ fn f3d_t12_mesh_staging_reversed_z_occlusion_50km_precision_and_swapchain_gpu() 
         renderer.info().validation_enabled,
         "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
     );
+    assert!(
+        renderer.info().sync_validation_enabled,
+        "Khronos synchronization validation must be active for opt-in GPU verification"
+    );
 
     let vs_bytes = encode_mesh_3d_vs().expect("valid synthesized mesh_3d VS");
     let fs_bytes = encode_mesh_3d_fs().expect("valid synthesized mesh_3d FS");
@@ -1250,6 +1254,10 @@ fn f3d_t12_cooked_mesh_3d_slang_executes_on_gpu() {
     assert!(
         renderer.info().validation_enabled,
         "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
+    );
+    assert!(
+        renderer.info().sync_validation_enabled,
+        "Khronos synchronization validation must be active for opt-in GPU verification"
     );
     verify_3d_occlusion_culling_and_50km_precision(
         &mut renderer,

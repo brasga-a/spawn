@@ -1410,6 +1410,73 @@ mod gpu_tests {
 
     #[test]
     #[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
+    fn retire_buffer_with_rejected_suballocation_still_queues_vk_handle() {
+        let descriptor = RendererDescriptor {
+            present_mode: PresentModePreference::Fifo,
+            validation: Validation::Required,
+        };
+        let mut renderer = VulkanRenderer::new(
+            SurfaceSource::Headless,
+            SurfaceSize::new(0, 0),
+            &descriptor,
+            GpuMemoryBudget::default(),
+        )
+        .expect("headless Vulkan 1.3 renderer with required validation");
+        assert!(renderer.info().sync_validation_enabled);
+
+        let create = |renderer: &mut VulkanRenderer, label: &str| {
+            VulkanBuffer::create(
+                &renderer.device,
+                &mut renderer.allocator,
+                256,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                MemoryDomain::DeviceLocal,
+                label,
+            )
+            .expect("test buffer")
+        };
+        let first = create(&mut renderer, "spawn.test.retire_first");
+        let second = create(&mut renderer, "spawn.test.retire_second");
+        let first_sub = first.suballocation;
+        let second_sub = second.suballocation;
+        let before = renderer.allocator.pending_retired_object_count();
+
+        // Deferred retirement (timeline never reaches `u64::MAX` before shutdown).
+        renderer
+            .allocator
+            .retire_buffer(&renderer.device, first, 0, u64::MAX)
+            .expect("first retirement");
+        // Forged: real `second` VkBuffer paired with the already-retired suballocation.
+        let forged = VulkanBuffer {
+            handle: second.handle,
+            suballocation: first_sub,
+        };
+        let err = renderer
+            .allocator
+            .retire_buffer(&renderer.device, forged, 0, u64::MAX)
+            .unwrap_err();
+        assert_eq!(err.kind(), RenderErrorKind::InvalidResourceHandle);
+        // Both VkBuffer handles are queued for destruction; neither leaks.
+        assert_eq!(
+            renderer.allocator.pending_retired_object_count(),
+            before + 2
+        );
+
+        // `second`'s real suballocation is still live; release it explicitly.
+        renderer
+            .allocator
+            .free_now(&renderer.device, second_sub)
+            .expect("free second suballocation");
+
+        assert_no_validation_errors(&renderer);
+        let closed = renderer.close().expect("clean close");
+        assert_eq!(closed.block_count, 0);
+        assert_eq!(closed.live_allocations, 0);
+        assert_eq!(closed.retired_allocations, 0);
+    }
+
+    #[test]
+    #[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
     fn upload_mesh_insert_failure_retires_gpu_buffers_with_zero_leaks() {
         let descriptor = RendererDescriptor {
             present_mode: PresentModePreference::Fifo,

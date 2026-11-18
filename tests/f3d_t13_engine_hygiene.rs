@@ -6,33 +6,24 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "common/graph.rs"]
+mod graph;
 
 #[test]
 fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    // 1. Parse every workspace manifest and verify Phase 5 edges + acyclicity.
-    let mut manifests = vec![root.join("Cargo.toml")];
-    for group in ["crates", "tools"] {
-        for entry in fs::read_dir(root.join(group))? {
-            let path = entry?.path().join("Cargo.toml");
-            if path.is_file() {
-                manifests.push(path);
-            }
-        }
-    }
-
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for manifest in &manifests {
-        let content = fs::read_to_string(manifest)?;
-        let (pkg_name, deps) = parse_manifest_spawn_deps(&content);
-        edges.insert(pkg_name, deps);
-    }
+    // 1. Resolve Phase 5 edges through Cargo's resolver (`cargo tree --invert`,
+    //    normal + build, all targets) and verify layering + acyclicity.
+    let graph = graph::resolved_workspace_graph(&root)?;
+    graph::assert_no_upward_edges(&graph)?;
+    let edges = &graph.edges;
 
     assert_eq!(
         edges["spawn-engine"],
@@ -55,7 +46,7 @@ fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
         edges["spawn-cli"],
         BTreeSet::from(["spawn-render".to_owned()])
     );
-    assert_acyclic(&edges);
+    graph::assert_acyclic(edges);
 
     // 2. `cargo metadata --no-deps` and `cargo tree -p spawn-engine -e normal`
     //    must contain zero tools, test-only crates, or rejected/unapproved crates.
@@ -226,17 +217,22 @@ fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
     ] {
         let doc = fs::read_to_string(root.join(milestone_doc))?;
         assert!(
-            doc.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
-            "{milestone_doc} must keep Phase 6 / Gate G3 open pending owner verification & sign-off"
+            doc.contains("SIGNED OFF BY OWNER (2026-11-18)"),
+            "{milestone_doc} must record the owner's Gate G3 sign-off"
+        );
+        assert!(
+            !doc.contains("IN PROGRESS — PENDING OWNER"),
+            "{milestone_doc} must not keep a stale pending Gate G3 status"
         );
         assert!(
             !doc.contains("satisfied for Linux/Wayland") && !doc.contains("Gate G3 satisfied"),
-            "{milestone_doc} must not prematurely declare Gate G3 satisfied"
+            "{milestone_doc} must use the owner sign-off wording, not a self-declared `satisfied` status"
         );
     }
     assert!(
-        root_agents.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
-        "root AGENTS.md must record Phase 6 / Gate G3 as pending owner verification & sign-off"
+        root_agents.contains("SIGNED OFF BY OWNER (2026-11-18)")
+            && !root_agents.contains("IN PROGRESS — PENDING OWNER"),
+        "root AGENTS.md must record the owner's Phase 6 / Gate G3 sign-off"
     );
 
     Ok(())
@@ -256,74 +252,6 @@ fn run_cargo_tree(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::err
         String::from_utf8_lossy(&out.stderr)
     );
     Ok(String::from_utf8(out.stdout)?)
-}
-
-fn parse_manifest_spawn_deps(content: &str) -> (String, BTreeSet<String>) {
-    let mut section = "";
-    let mut name = String::new();
-    let mut deps = BTreeSet::new();
-
-    for raw_line in content.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            section = &line[1..line.len() - 1];
-            continue;
-        }
-        if section == "package"
-            && let Some(rest) = line.strip_prefix("name")
-            && let Some((_, rhs)) = rest.split_once('=')
-        {
-            name = rhs.trim().trim_matches('"').to_owned();
-        } else if (section == "dependencies" || section.ends_with(".dependencies"))
-            && !section.contains("dev-dependencies")
-            && let Some((dep_key, _)) = line.split_once('=')
-        {
-            let dep = dep_key.trim().trim_matches('"');
-            if dep.starts_with("spawn-") {
-                deps.insert(dep.to_owned());
-            }
-        }
-    }
-    assert!(!name.is_empty(), "manifest missing [package] name");
-    (name, deps)
-}
-
-fn assert_acyclic(edges: &BTreeMap<String, BTreeSet<String>>) {
-    let mut in_degree: BTreeMap<&str, usize> =
-        edges.keys().map(|node| (node.as_str(), 0)).collect();
-    for targets in edges.values() {
-        for target in targets {
-            if let Some(deg) = in_degree.get_mut(target.as_str()) {
-                *deg += 1;
-            }
-        }
-    }
-    let mut queue: VecDeque<&str> = in_degree
-        .iter()
-        .filter_map(|(&node, &deg)| (deg == 0).then_some(node))
-        .collect();
-    let mut visited = 0;
-    while let Some(node) = queue.pop_front() {
-        visited += 1;
-        if let Some(targets) = edges.get(node) {
-            for target in targets {
-                if let Some(deg) = in_degree.get_mut(target.as_str()) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(target.as_str());
-                    }
-                }
-            }
-        }
-    }
-    assert_eq!(
-        visited,
-        edges.len(),
-        "cycle detected in workspace spawn-* dependency graph: {edges:?}"
-    );
 }
 
 fn audit_engine_source(path: &Path, content: &str) {
