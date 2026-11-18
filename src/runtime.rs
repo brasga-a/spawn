@@ -87,11 +87,26 @@ pub trait WindowSurface {
 
 /// Renderer capability seam required by [`run_session`].
 ///
-/// Minimal clear-only mocks (such as Foundation verification harnesses) need
-/// only implement the five baseline surface methods; the 3D shader, pipeline,
-/// mesh, and allocator methods provide pure-Rust validating defaults and are
-/// overridden by `spawn_render::Renderer` on native targets and by 3D session
-/// verification mocks (`F3D-T10`).
+/// Every native renderer backend and headless test mock must implement all
+/// surface, cooked-shader, pipeline, mesh, allocator, and shutdown methods
+/// explicitly (no silent mock default implementations).
+///
+/// ```compile_fail
+/// use spawn_engine::{EngineError, RenderSurface};
+/// use spawn_render::{ClearColor, FrameOutcome, PresentationState, SurfaceSize, ValidationMessage};
+///
+/// struct IncompleteRenderer;
+///
+/// impl RenderSurface for IncompleteRenderer {
+///     fn resize(&mut self, _size: SurfaceSize) {}
+///     fn render_clear(&mut self, _color: ClearColor) -> Result<FrameOutcome, EngineError> {
+///         Ok(FrameOutcome::Presented)
+///     }
+///     fn state(&self) -> PresentationState { PresentationState::Ready }
+///     fn drain_validation_messages(&mut self, _out: &mut Vec<ValidationMessage>) -> u64 { 0 }
+///     fn validation_error_count(&self) -> u64 { 0 }
+/// }
+/// ```
 pub trait RenderSurface {
     /// Reports the latest physical pixel size of the drawable surface.
     fn resize(&mut self, size: SurfaceSize);
@@ -126,28 +141,14 @@ pub trait RenderSurface {
         &mut self,
         label: &str,
         cooked_bytes: &[u8],
-    ) -> Result<ShaderHandle, EngineError> {
-        let cooked = CookedShader::decode_named(label, cooked_bytes).map_err(|err| {
-            EngineError::new(EngineErrorKind::Shader)
-                .with_detail(format!("validating cooked shader `{label}`"))
-                .with_cause(&err)
-        })?;
-        let slot = match cooked.stage {
-            ShaderStage::Vertex => 0,
-            ShaderStage::Fragment => 1,
-            ShaderStage::Compute => 2,
-        };
-        Ok(ShaderHandle::from_raw(slot, 1))
-    }
+    ) -> Result<ShaderHandle, EngineError>;
 
     /// Releases `handle`, invalidating its generation.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
-    fn destroy_shader(&mut self, _handle: ShaderHandle) -> Result<(), EngineError> {
-        Ok(())
-    }
+    fn destroy_shader(&mut self, handle: ShaderHandle) -> Result<(), EngineError>;
 
     /// Validates shader compatibility and compiles a `dynamicRendering`
     /// graphics pipeline.
@@ -159,23 +160,14 @@ pub trait RenderSurface {
     fn create_graphics_pipeline(
         &mut self,
         descriptor: &GraphicsPipelineDescriptor<'_>,
-    ) -> Result<PipelineHandle, EngineError> {
-        if descriptor.vertex_shader == descriptor.fragment_shader {
-            return Err(EngineError::new(EngineErrorKind::Shader).with_detail(
-                "vertex_shader and fragment_shader cannot reference the same ShaderHandle",
-            ));
-        }
-        Ok(PipelineHandle::from_raw(0, 1))
-    }
+    ) -> Result<PipelineHandle, EngineError>;
 
     /// Releases `handle`, retiring the underlying GPU pipeline.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
-    fn destroy_pipeline(&mut self, _handle: PipelineHandle) -> Result<(), EngineError> {
-        Ok(())
-    }
+    fn destroy_pipeline(&mut self, handle: PipelineHandle) -> Result<(), EngineError>;
 
     /// Validates `descriptor` and uploads vertices and `u32` indices into
     /// `DEVICE_LOCAL` buffers.
@@ -184,23 +176,14 @@ pub trait RenderSurface {
     ///
     /// Returns [`EngineError`] (`ENGN-0005`) on invalid descriptor or GPU memory
     /// exhaustion.
-    fn upload_mesh(&mut self, descriptor: &MeshDescriptor<'_>) -> Result<MeshHandle, EngineError> {
-        descriptor.validate().map_err(|err| {
-            EngineError::new(EngineErrorKind::Render)
-                .with_detail(format!("uploading mesh `{}`", descriptor.label))
-                .with_cause(&err)
-        })?;
-        Ok(MeshHandle::from_raw(0, 1))
-    }
+    fn upload_mesh(&mut self, descriptor: &MeshDescriptor<'_>) -> Result<MeshHandle, EngineError>;
 
     /// Releases an uploaded 3D mesh handle.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
-    fn destroy_mesh(&mut self, _handle: MeshHandle) -> Result<(), EngineError> {
-        Ok(())
-    }
+    fn destroy_mesh(&mut self, handle: MeshHandle) -> Result<(), EngineError>;
 
     /// Clears the next swapchain image to `clear_color` and `D32_SFLOAT`
     /// reversed-Z depth to `0.0`, draws `draws` as camera-relative indexed 3D
@@ -212,25 +195,14 @@ pub trait RenderSurface {
     /// unrecoverable presentation failure.
     fn render_meshes(
         &mut self,
-        _pipeline: PipelineHandle,
+        pipeline: PipelineHandle,
         clear_color: ClearColor,
         view: &CameraRelativeView,
         draws: &[MeshDraw],
-    ) -> Result<FrameOutcome, EngineError> {
-        for draw in draws {
-            draw.pack_push_constants(view).map_err(|err| {
-                EngineError::new(EngineErrorKind::Render)
-                    .with_detail("packing camera-relative 3D mesh push constants")
-                    .with_cause(&err)
-            })?;
-        }
-        self.render_clear(clear_color)
-    }
+    ) -> Result<FrameOutcome, EngineError>;
 
     /// Current GPU block suballocator statistics.
-    fn allocator_stats(&self) -> GpuAllocatorStats {
-        GpuAllocatorStats::default()
-    }
+    fn allocator_stats(&self) -> GpuAllocatorStats;
 
     /// Waits for GPU idle, releases remaining renderer-internal resources and
     /// memory blocks, and returns post-shutdown [`GpuAllocatorStats`].
@@ -240,10 +212,7 @@ pub trait RenderSurface {
     /// Returns [`EngineError`] (`ENGN-0005`) if GPU shutdown fails.
     fn close(self) -> Result<GpuAllocatorStats, EngineError>
     where
-        Self: Sized,
-    {
-        Ok(self.allocator_stats())
-    }
+        Self: Sized;
 }
 
 /// Backend seam supplying monotonic elapsed time, cooked-shader artifact I/O,
@@ -323,10 +292,57 @@ pub trait RuntimeBackend {
     /// Loads raw cooked `.spnshdr` bytes for `artifact_name` inside
     /// `shader_dir` (`ADR-0014`, `SPN-INV-083`).
     ///
-    /// Native backends read `shader_dir.join(artifact_name)` from disk and
-    /// include [`SHADER_COOK_HINT`] on missing files; headless mocks inherit
-    /// minimal self-contained `mesh_3d` artifacts so Foundation tests run in
-    /// `slangc`-free CI without external files.
+    /// Native backends must read `shader_dir.join(artifact_name)` from disk and
+    /// include [`SHADER_COOK_HINT`] on missing files; headless test harnesses
+    /// must supply fixtures explicitly (for example via
+    /// [`synthesize_minimal_mesh_3d_shader`]) rather than relying on a silent
+    /// trait default.
+    ///
+    /// ```compile_fail
+    /// use std::path::Path;
+    /// use std::time::Duration;
+    /// use spawn_engine::{EngineError, RenderSurface, RuntimeBackend, WindowSurface};
+    /// use spawn_platform::{CursorGrabMode, Event, PhysicalSize, WindowDescriptor, WindowId};
+    /// use spawn_render::{RendererDescriptor, SurfaceSize};
+    ///
+    /// struct MissingShaderReader;
+    /// struct DummyWin(WindowId);
+    /// impl WindowSurface for DummyWin { fn id(&self) -> WindowId { self.0 } }
+    ///
+    /// // Missing `read_cooked_shader` must fail to compile.
+    /// impl RuntimeBackend for MissingShaderReader {
+    ///     type Platform = ();
+    ///     type Window = DummyWin;
+    ///     type Renderer<'w> = DummyRenderer where Self::Window: 'w;
+    ///     fn read_elapsed(&mut self) -> Duration { Duration::ZERO }
+    ///     fn create_platform(&mut self) -> Result<(), EngineError> { Ok(()) }
+    ///     fn create_window(&mut self, _: &mut (), _: &WindowDescriptor)
+    ///         -> Result<(DummyWin, PhysicalSize), EngineError> { unreachable!() }
+    ///     fn set_cursor_grab(&mut self, _: &mut (), _: WindowId, _: CursorGrabMode)
+    ///         -> Result<(), EngineError> { Ok(()) }
+    ///     fn pump_events(&mut self, _: &mut (), _: Option<Duration>, _: &mut Vec<Event>)
+    ///         -> Result<(), EngineError> { Ok(()) }
+    ///     fn create_renderer<'w>(&mut self, _: &'w DummyWin, _: SurfaceSize, _: &RendererDescriptor)
+    ///         -> Result<Self::Renderer<'w>, EngineError> { unreachable!() }
+    /// }
+    /// # struct DummyRenderer;
+    /// # impl RenderSurface for DummyRenderer {
+    /// #     fn resize(&mut self, _: SurfaceSize) {}
+    /// #     fn render_clear(&mut self, _: spawn_render::ClearColor) -> Result<spawn_render::FrameOutcome, EngineError> { unreachable!() }
+    /// #     fn state(&self) -> spawn_render::PresentationState { unreachable!() }
+    /// #     fn drain_validation_messages(&mut self, _: &mut Vec<spawn_render::ValidationMessage>) -> u64 { 0 }
+    /// #     fn validation_error_count(&self) -> u64 { 0 }
+    /// #     fn load_shader(&mut self, _: &str, _: &[u8]) -> Result<spawn_render::ShaderHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_shader(&mut self, _: spawn_render::ShaderHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn create_graphics_pipeline(&mut self, _: &spawn_render::GraphicsPipelineDescriptor<'_>) -> Result<spawn_render::PipelineHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_pipeline(&mut self, _: spawn_render::PipelineHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn upload_mesh(&mut self, _: &spawn_render::MeshDescriptor<'_>) -> Result<spawn_render::MeshHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_mesh(&mut self, _: spawn_render::MeshHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn render_meshes(&mut self, _: spawn_render::PipelineHandle, _: spawn_render::ClearColor, _: &spawn_render::CameraRelativeView, _: &[spawn_render::MeshDraw]) -> Result<spawn_render::FrameOutcome, EngineError> { unreachable!() }
+    /// #     fn allocator_stats(&self) -> spawn_render::GpuAllocatorStats { Default::default() }
+    /// #     fn close(self) -> Result<spawn_render::GpuAllocatorStats, EngineError> { Ok(Default::default()) }
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
@@ -336,9 +352,7 @@ pub trait RuntimeBackend {
         &mut self,
         shader_dir: &Path,
         artifact_name: &str,
-    ) -> Result<Vec<u8>, EngineError> {
-        synthesize_minimal_mesh_3d_shader(shader_dir, artifact_name)
-    }
+    ) -> Result<Vec<u8>, EngineError>;
 
     /// Observer hook invoked once after shaders, pipeline, and procedural 3D
     /// meshes are uploaded.
@@ -957,4 +971,33 @@ fn drive_loop<B: RuntimeBackend>(
     }
 
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthesized_minimal_mesh_shaders_decode_and_match_mesh_3d_pipeline_layout() {
+        let dir = Path::new("target/shaders");
+        let vs_bytes = synthesize_minimal_mesh_3d_shader(dir, MESH_3D_VS_ARTIFACT).unwrap();
+        let fs_bytes = synthesize_minimal_mesh_3d_shader(dir, MESH_3D_FS_ARTIFACT).unwrap();
+
+        let vs = CookedShader::decode_named(MESH_3D_VS_ARTIFACT, &vs_bytes).unwrap();
+        let fs = CookedShader::decode_named(MESH_3D_FS_ARTIFACT, &fs_bytes).unwrap();
+        validate_graphics_pipeline_shaders(
+            &vs,
+            &fs,
+            &PipelineLayoutDesc {
+                vertex_inputs: &MESH_VERTEX_ATTRIBUTES,
+                push_constants: MESH_PUSH_CONSTANT_RANGE,
+                descriptor_bindings: &[],
+            },
+        )
+        .unwrap();
+
+        let err = synthesize_minimal_mesh_3d_shader(dir, "unknown.spnshdr").unwrap_err();
+        assert_eq!(err.kind(), EngineErrorKind::Shader);
+        assert_eq!(err.code(), "ENGN-0008");
+    }
 }

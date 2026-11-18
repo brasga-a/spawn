@@ -215,7 +215,12 @@ impl RenderSurface for Mock3dRenderer<'_> {
         self.log
             .borrow_mut()
             .push(LifecycleEvent::DestroyShader(handle));
+        let prev_len = self.live_shaders.len();
         self.live_shaders.retain(|&h| h != handle);
+        if self.live_shaders.len() == prev_len {
+            return Err(EngineError::new(EngineErrorKind::Render)
+                .with_detail(format!("unknown or stale shader handle {handle:?}")));
+        }
         if self.fail_destroy_shader {
             return Err(EngineError::new(EngineErrorKind::Render)
                 .with_detail("injected destroy_shader failure"));
@@ -233,6 +238,13 @@ impl RenderSurface for Mock3dRenderer<'_> {
                 descriptor.label
             )));
         }
+        if descriptor.vertex_shader == descriptor.fragment_shader
+            || !self.live_shaders.contains(&descriptor.vertex_shader)
+            || !self.live_shaders.contains(&descriptor.fragment_shader)
+        {
+            return Err(EngineError::new(EngineErrorKind::Shader)
+                .with_detail("invalid or unknown shader handle in pipeline descriptor"));
+        }
         let handle = PipelineHandle::from_raw(0, 1);
         self.live_pipeline = Some(handle);
         self.log.borrow_mut().push(LifecycleEvent::CreatePipeline {
@@ -246,9 +258,11 @@ impl RenderSurface for Mock3dRenderer<'_> {
         self.log
             .borrow_mut()
             .push(LifecycleEvent::DestroyPipeline(handle));
-        if self.live_pipeline == Some(handle) {
-            self.live_pipeline = None;
+        if self.live_pipeline != Some(handle) {
+            return Err(EngineError::new(EngineErrorKind::Render)
+                .with_detail(format!("unknown or stale pipeline handle {handle:?}")));
         }
+        self.live_pipeline = None;
         if self.fail_destroy_pipeline {
             return Err(EngineError::new(EngineErrorKind::Render)
                 .with_detail("injected destroy_pipeline failure"));
@@ -291,7 +305,12 @@ impl RenderSurface for Mock3dRenderer<'_> {
         self.log
             .borrow_mut()
             .push(LifecycleEvent::DestroyMesh(handle));
+        let prev_len = self.live_meshes.len();
         self.live_meshes.retain(|&h| h != handle);
+        if self.live_meshes.len() == prev_len {
+            return Err(EngineError::new(EngineErrorKind::Render)
+                .with_detail(format!("unknown or stale mesh handle {handle:?}")));
+        }
         if self.fail_destroy_mesh_at == Some(attempt) {
             return Err(
                 EngineError::new(EngineErrorKind::Render).with_detail(format!(
@@ -309,7 +328,15 @@ impl RenderSurface for Mock3dRenderer<'_> {
         view: &CameraRelativeView,
         draws: &[MeshDraw],
     ) -> Result<FrameOutcome, EngineError> {
+        if self.live_pipeline != Some(pipeline) {
+            return Err(EngineError::new(EngineErrorKind::Render)
+                .with_detail(format!("unknown or stale pipeline handle {pipeline:?}")));
+        }
         for draw in draws {
+            if !self.live_meshes.contains(&draw.mesh) {
+                return Err(EngineError::new(EngineErrorKind::Render)
+                    .with_detail(format!("unknown or stale mesh handle {:?}", draw.mesh)));
+            }
             draw.pack_push_constants(view).map_err(|err| {
                 EngineError::new(EngineErrorKind::Render)
                     .with_detail("packing 3D mesh push constants")
@@ -551,6 +578,13 @@ impl RuntimeBackend for Mock3dBackend {
     }
 }
 
+fn expected_shader_label(artifact: &str) -> String {
+    Path::new("target/shaders")
+        .join(artifact)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn vs_handle() -> ShaderHandle {
     ShaderHandle::from_raw(0, 1)
 }
@@ -670,7 +704,7 @@ fn f3d_t10_partial_startup_and_runtime_failures_unwind_scene_handles_in_exact_re
         assert_eq!(err.code(), "ENGN-0008", "case {label}");
         let mut expected = prefix_events(win);
         expected.push(LifecycleEvent::LoadShader {
-            label: format!("target/shaders/{MESH_3D_VS_ARTIFACT}"),
+            label: expected_shader_label(MESH_3D_VS_ARTIFACT),
             handle: vs_handle(),
         });
         expected.push(LifecycleEvent::DestroyShader(vs_handle()));
@@ -687,11 +721,11 @@ fn f3d_t10_partial_startup_and_runtime_failures_unwind_scene_handles_in_exact_re
         assert_eq!(err.kind(), kind);
         let mut expected = prefix_events(win);
         expected.push(LifecycleEvent::LoadShader {
-            label: format!("target/shaders/{MESH_3D_VS_ARTIFACT}"),
+            label: expected_shader_label(MESH_3D_VS_ARTIFACT),
             handle: vs_handle(),
         });
         expected.push(LifecycleEvent::LoadShader {
-            label: format!("target/shaders/{MESH_3D_FS_ARTIFACT}"),
+            label: expected_shader_label(MESH_3D_FS_ARTIFACT),
             handle: fs_handle(),
         });
         expected.push(LifecycleEvent::DestroyShader(fs_handle()));
@@ -710,11 +744,11 @@ fn f3d_t10_partial_startup_and_runtime_failures_unwind_scene_handles_in_exact_re
         assert_eq!(err.code(), "ENGN-0005");
         let mut expected = prefix_events(win);
         expected.push(LifecycleEvent::LoadShader {
-            label: format!("target/shaders/{MESH_3D_VS_ARTIFACT}"),
+            label: expected_shader_label(MESH_3D_VS_ARTIFACT),
             handle: vs_handle(),
         });
         expected.push(LifecycleEvent::LoadShader {
-            label: format!("target/shaders/{MESH_3D_FS_ARTIFACT}"),
+            label: expected_shader_label(MESH_3D_FS_ARTIFACT),
             handle: fs_handle(),
         });
         expected.push(LifecycleEvent::CreatePipeline {
@@ -1015,7 +1049,7 @@ fn normalize_location(report: &str) -> String {
                     .replace('\\', "/");
                 format!("  --> {file_only}:<LINE>:<COL>")
             } else {
-                line.to_owned()
+                line.replace('\\', "/")
             }
         })
         .collect::<Vec<_>>()
@@ -1068,4 +1102,81 @@ caused by: error[REND-0010]: invalid cooked shader artifact
    = detail: artifact `target/shaders/mesh_3d.vs_main.spnshdr`: field `header`: truncated artifact of 23 bytes (minimum 40 bytes)
 "#
     );
+}
+
+#[test]
+fn f3d_t10_render_surface_rejects_unknown_and_stale_handles() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let window = MockWindow {
+        id: WindowId::from_raw(1),
+        log: Rc::clone(&log),
+    };
+    let mut renderer = Mock3dRenderer {
+        _window: &window,
+        size: SurfaceSize::new(640, 360),
+        state: PresentationState::Ready,
+        log,
+        next_shader_idx: 0,
+        next_mesh_idx: 0,
+        live_shaders: Vec::new(),
+        live_pipeline: None,
+        live_meshes: Vec::new(),
+        peak_live_allocations: 0,
+        scripted_outcomes: VecDeque::new(),
+        recorded_frames: Rc::new(RefCell::new(Vec::new())),
+        fail_pipeline_kind: None,
+        fail_upload_mesh_at: None,
+        upload_attempts: 0,
+        fail_destroy_mesh_at: None,
+        destroy_mesh_attempts: 0,
+        fail_destroy_pipeline: false,
+        fail_destroy_shader: false,
+        fail_close: false,
+        validation_errors: 0,
+    };
+
+    let stale_shader = ShaderHandle::from_raw(99, 1);
+    let stale_pipeline = PipelineHandle::from_raw(99, 1);
+    let stale_mesh = MeshHandle::from_raw(99, 1);
+
+    assert_eq!(
+        renderer.destroy_shader(stale_shader).unwrap_err().kind(),
+        EngineErrorKind::Render
+    );
+    assert_eq!(
+        renderer
+            .create_graphics_pipeline(&GraphicsPipelineDescriptor::new_mesh_3d(
+                "bad",
+                stale_shader,
+                stale_shader,
+            ))
+            .unwrap_err()
+            .kind(),
+        EngineErrorKind::Shader
+    );
+    assert_eq!(
+        renderer
+            .destroy_pipeline(stale_pipeline)
+            .unwrap_err()
+            .kind(),
+        EngineErrorKind::Render
+    );
+    assert_eq!(
+        renderer.destroy_mesh(stale_mesh).unwrap_err().kind(),
+        EngineErrorKind::Render
+    );
+    assert_eq!(
+        renderer
+            .render_meshes(
+                stale_pipeline,
+                ClearColor::new(0.0, 0.0, 0.0, 1.0),
+                &CameraRelativeView::new(spawn_math::Mat4::IDENTITY, spawn_math::Quat::IDENTITY),
+                &[],
+            )
+            .unwrap_err()
+            .kind(),
+        EngineErrorKind::Render
+    );
+
+    let _ = renderer.close().unwrap();
 }

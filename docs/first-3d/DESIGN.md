@@ -1,6 +1,6 @@
 # Technical Design — First 3D Rendering and Free Camera
 
-**Status:** `EXISTS` on Linux/Wayland + Vulkan 1.3 (verified architecture across `spawn-math`, `spawn-cli`, `spawn-render`, and `spawn-engine`, with concrete symbols documented in each crate's `AGENTS.md` and `src/`; X11 and Windows backends remain `PLANNED`). Elements governed by *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) or [ADR-0022](../adr/0022-repository-layout.md) remain marked **proposal**.
+**Status:** Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3 (verified architecture across `spawn-math`, `spawn-cli`, `spawn-render`, and `spawn-engine`, with concrete symbols documented in each crate's `AGENTS.md` and `src/`; Phase 6 / Gate G3 **`IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`**; X11 and Windows backends remain `PLANNED`). Elements governed by *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) or [ADR-0022](../adr/0022-repository-layout.md) remain marked **proposal**.
 
 ## 1. Architecture and crate boundaries
 

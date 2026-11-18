@@ -1,6 +1,6 @@
 # Specification — First 3D Rendering and Free Camera
 
-**Status:** `EXISTS` on Linux/Wayland + Vulkan 1.3 (X11 and Windows backends remain `PLANNED`; see [VERIFICATION.md](VERIFICATION.md#exit-gate)). Items depending on *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) or [ADR-0022](../adr/0022-repository-layout.md) are marked **proposal** and must not be adopted as engine-wide rules before owner sign-off.  
+**Status:** Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3; Phase 6 / Gate G3 **`IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`** (X11 and Windows backends remain `PLANNED`; see [VERIFICATION.md](VERIFICATION.md#exit-gate)). Items depending on *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) or [ADR-0022](../adr/0022-repository-layout.md) are marked **proposal** and must not be adopted as engine-wide rules before owner sign-off.  
 **Audience:** contributors implementing `spawn-math`, `spawn-cli`, `spawn-render`, and the root `spawn-engine` executable.
 
 ## Goal

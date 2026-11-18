@@ -105,6 +105,21 @@ fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
             "spawn-engine normal tree must not contain `{forbidden}`:\n{engine_tree}"
         );
     }
+    if cfg!(target_os = "linux") {
+        for linux_backend in ["ash", "wayland-client", "wayland-protocols"] {
+            assert!(
+                engine_tree.contains(linux_backend),
+                "spawn-engine on Linux must enable `{linux_backend}`:\n{engine_tree}"
+            );
+        }
+    } else {
+        for linux_backend in ["ash", "wayland-client", "wayland-protocols"] {
+            assert!(
+                !engine_tree.contains(linux_backend),
+                "spawn-engine on non-Linux targets must not pull Linux backend `{linux_backend}`:\n{engine_tree}"
+            );
+        }
+    }
 
     // 3. Zero `build.rs` scripts across root and Milestone 2 packages (`SPN-INV-084`),
     //    and zero tracked `.spv` or `.spnshdr` shader binaries in git.
@@ -200,13 +215,39 @@ fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
         );
     }
 
+    for milestone_doc in [
+        "docs/first-3d/VERIFICATION.md",
+        "docs/first-3d/PLAN.md",
+        "docs/first-3d/README.md",
+        "docs/first-3d/SPEC.md",
+        "docs/first-3d/DESIGN.md",
+        "docs/first-3d/INVARIANTS.md",
+        "docs/README.md",
+    ] {
+        let doc = fs::read_to_string(root.join(milestone_doc))?;
+        assert!(
+            doc.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
+            "{milestone_doc} must keep Phase 6 / Gate G3 open pending owner verification & sign-off"
+        );
+        assert!(
+            !doc.contains("satisfied for Linux/Wayland") && !doc.contains("Gate G3 satisfied"),
+            "{milestone_doc} must not prematurely declare Gate G3 satisfied"
+        );
+    }
+    assert!(
+        root_agents.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
+        "root AGENTS.md must record Phase 6 / Gate G3 as pending owner verification & sign-off"
+    );
+
     Ok(())
 }
 
 fn run_cargo_tree(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     let out = Command::new(env!("CARGO"))
         .current_dir(root)
+        .env("CARGO_TERM_COLOR", "never")
         .arg("tree")
+        .args(["--color", "never"])
         .args(args)
         .output()?;
     assert!(

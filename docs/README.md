@@ -1,6 +1,6 @@
 # Spawn Engineering Documentation
 
-> Status: **foundation and [Milestone 2 (First 3D and Free Camera)](first-3d/README.md) slices `EXISTS` on Linux/Wayland + Vulkan 1.3; wider engine architecture `PLANNED`**. `spawn-core`, `spawn-math`, `spawn-platform` (Wayland), `spawn-input`, `spawn-render` (Vulkan 1.3), `spawn-cli` (offline Slang shader cook), and the root `spawn-engine` composition binary implement the [foundation](foundation/README.md) and [first-3d](first-3d/README.md) milestones; all other crates (`spawn-ecs`, `spawn-world`, `spawn-scene`, `spawn-assets`, `spawn-physics`, etc.) and X11/Windows backends remain `SCAFFOLD` or `PLANNED`. The repository's root [AGENTS.md](../AGENTS.md) and crate-level `AGENTS.md` files remain the authoritative ownership and agent-behavior rules.
+> Status: **foundation `EXISTS` on Linux/Wayland; [Milestone 2 (First 3D and Free Camera)](first-3d/README.md) Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3 with Phase 6 / Gate G3 `IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`; wider engine architecture `PLANNED`**. `spawn-core`, `spawn-math`, `spawn-platform` (Wayland), `spawn-input`, `spawn-render` (Vulkan 1.3), `spawn-cli` (offline Slang shader cook), and the root `spawn-engine` composition binary implement the [foundation](foundation/README.md) and [first-3d](first-3d/README.md) Phases 0–5 slices; all other crates (`spawn-ecs`, `spawn-world`, `spawn-scene`, `spawn-assets`, `spawn-physics`, etc.) and X11/Windows backends remain `SCAFFOLD` or `PLANNED`. The repository's root [AGENTS.md](../AGENTS.md) and crate-level `AGENTS.md` files remain the authoritative ownership and agent-behavior rules.
 
 ## Start here
 
@@ -16,12 +16,12 @@
 | [Foundation invariants](foundation/INVARIANTS.md) | What milestone rules govern the foundation slice? |
 | [Foundation verification](foundation/VERIFICATION.md) | How were the foundation requirements proven? |
 | [Foundation delivery plan](foundation/PLAN.md) | In what order did the foundation increments land? |
-| [First 3D overview](first-3d/README.md) | What was built in Milestone 2 (`EXISTS` on Linux/Wayland + Vulkan 1.3), and what stays out of scope? |
+| [First 3D overview](first-3d/README.md) | What is in Milestone 2 (Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3; Gate G3 `IN PROGRESS`), and what stays out of scope? |
 | [First 3D specification](first-3d/SPEC.md) | What must the initial 3D rendering, shader cook, math, and free-camera slice do? |
 | [First 3D design](first-3d/DESIGN.md) | How do `spawn-math`, `spawn-cli`, `spawn-render`, and `spawn-engine` deliver 3D without coupling? |
 | [First 3D invariants](first-3d/INVARIANTS.md) | What spatial, shader, GPU, and simulation/presentation rules govern Milestone 2? |
-| [First 3D verification](first-3d/VERIFICATION.md) | How were math precision, offline shader cooking, reversed-Z occlusion, and camera determinism proven? |
-| [First 3D delivery plan](first-3d/PLAN.md) | In what order (Phases 0–6) did Milestone 2 land? |
+| [First 3D verification](first-3d/VERIFICATION.md) | How are math precision, offline shader cooking, reversed-Z occlusion, and camera determinism proven, and what remains for Gate G3? |
+| [First 3D delivery plan](first-3d/PLAN.md) | In what order (Phases 0–6) is Milestone 2 progressing? |
 | [Architecture decisions](adr/README.md) | Which choices are proposed or accepted? |
 | [Approved dependencies](DEPENDENCIES.md) | Which third-party crates may be added, where, and which are rejected? |
 
@@ -31,7 +31,7 @@
 - **docs/architecture:** engine-wide invariants (binding), technical design, quality gates and the decision register.
 - **docs/DEPENDENCIES.md:** approved, rejected and deferred third-party crates.
 - **docs/foundation:** specification and verification record of Spawn's first running slice (`EXISTS` on Linux/Wayland).
-- **docs/first-3d:** specification, design, invariants, and verification record of Milestone 2 (`EXISTS` on Linux/Wayland + Vulkan 1.3: spatial math, offline Slang shader cook, Vulkan 1.3 3D pipeline/depth/allocator slice, and genre-free 60 Hz `f64` free-fly camera).
+- **docs/first-3d:** specification, design, invariants, and verification record of Milestone 2 (Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3; Phase 6 / Gate G3 `IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`).
 - **docs/adr:** rationale and status of engineering decisions; proposed ADRs **do not authorize** implementation.
 - **Rust code and Cargo manifests:** the actual implemented state. If documentation disagrees with code, flag and resolve the conflict, do not assume the document was implemented.
 
@@ -41,4 +41,4 @@ When a milestone requirement changes, update its requirement ID, related invaria
 
 Scope at this stage:
 - **Implemented ([foundation/](foundation/README.md), `EXISTS` on Linux/Wayland):** native application lifecycle, window, raw input events (including relative pointer motion and cursor constraints), semantic input sampling, a Vulkan 1.3 clear frame, graceful recovery, and headless timing/input/composition tests.
-- **Implemented ([first-3d/](first-3d/README.md), `EXISTS` on Linux/Wayland + Vulkan 1.3):** `spawn-math` (`f32` primitives, `f64` world positions, reversed-Z, single-site Vulkan Y-flip, `libm` deterministic subset), offline Slang → SPIR-V shader cooking in `spawn-cli` ([ADR-0014](adr/0014-shader-toolchain.md)), in-house Vulkan 1.3 block allocator, buffers, `D32_SFLOAT` reversed-Z depth, and dynamic-rendering mesh pipeline in `spawn-render`, plus a genre-free 60 Hz `f64` free-fly camera with `alpha` presentation interpolation, procedural 3D scene, and camera-relative `f32` submission in `spawn-engine`. No genre-specific behavior; X11, Windows, and wider engine subsystems remain `PLANNED` / `SCAFFOLD`.
+- **Implemented ([first-3d/](first-3d/README.md), Phases 0–5 `EXISTS` on Linux/Wayland + Vulkan 1.3; Phase 6 / Gate G3 `IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`):** `spawn-math` (`f32` primitives, `f64` world positions, reversed-Z, single-site Vulkan Y-flip, `libm` deterministic subset), offline Slang → SPIR-V shader cooking in `spawn-cli` ([ADR-0014](adr/0014-shader-toolchain.md)), in-house Vulkan 1.3 block allocator, buffers, `D32_SFLOAT` reversed-Z depth, and dynamic-rendering mesh pipeline in `spawn-render`, plus a genre-free 60 Hz `f64` free-fly camera with `alpha` presentation interpolation, procedural 3D scene, and camera-relative `f32` submission in `spawn-engine`. No genre-specific behavior; X11, Windows, and wider engine subsystems remain `PLANNED` / `SCAFFOLD`.
