@@ -1268,10 +1268,13 @@ fn f3d_t13_shader_toolchain_headless_tree_build_rs_and_uncommitted_spv_audit() {
         .collect();
     for forbidden in [
         "ash",
+        "bytemuck",
         "wayland-client",
         "wayland-protocols",
         "raw-window-handle",
         "rustix",
+        "windows-sys",
+        "x11rb",
         "spawn-platform",
         "spawn-input",
         "serde_json",
@@ -1340,7 +1343,7 @@ fn f3d_t13_shader_toolchain_headless_tree_build_rs_and_uncommitted_spv_audit() {
                 break;
             }
             if code.starts_with("pub ") && !code.starts_with("pub mod ") {
-                for leaked in ["clap::", "rspirv::", "ash::", "vk::"] {
+                for leaked in ["clap::", "rspirv::", "ash::", "vk::", "bytemuck::"] {
                     assert!(
                         !code.contains(leaked),
                         "{}:{} leaks third-party type `{leaked}` in public item: `{code}`",

@@ -9,8 +9,13 @@
 //!   [`REVERSED_Z_CLEAR_DEPTH`].
 //! - Generational resource handles and pipeline/offscreen descriptors (`SPN-INV-035`):
 //!   [`ShaderHandle`], [`PipelineHandle`], [`OffscreenTargetHandle`],
-//!   [`PipelineTarget`], [`FrontFace`], [`CullMode`],
+//!   [`MeshHandle`], [`PipelineTarget`], [`FrontFace`], [`CullMode`],
 //!   [`GraphicsPipelineDescriptor`], [`OffscreenReadback`].
+//! - Static 3D mesh descriptors and camera-relative draw contracts (`SPN-INV-052`,
+//!   `SPN-INV-053`): [`MeshVertex`], [`MeshDescriptor`], [`CameraRelativeView`],
+//!   [`MeshDraw`], [`PackedMeshPushConstants`], [`MESH_VERTEX_STRIDE`],
+//!   [`MESH_VERTEX_ATTRIBUTES`], [`MESH_PUSH_CONSTANT_BYTES`],
+//!   [`MESH_PUSH_CONSTANT_RANGE`].
 //! - Cooked-shader binary contract and untrusted layout validator (ADR-0014):
 //!   [`CookedShader`], [`ShaderStage`], [`ShaderStageFlags`], [`VertexFormat`],
 //!   [`VertexInputAttribute`], [`DescriptorKind`], [`DescriptorBinding`],
@@ -21,10 +26,11 @@
 //! With the `vulkan` Cargo feature, the Vulkan 1.3 backend (ADR-0004) adds
 //! `Renderer`: it manages in-house GPU block suballocation, swapchain-matched
 //! `D32_SFLOAT` reversed-Z depth attachments, `dynamicRendering` graphics
-//! pipelines, offscreen RGBA8 readback targets, and presentation to a window
+//! pipelines, static 3D vertex/index staging uploads, camera-relative indexed
+//! mesh draws, offscreen RGBA8 readback targets, and presentation to a window
 //! given through the `raw-window-handle` traits (or a headless surface). Vulkan
-//! types never appear in the public API; the in-house RHI is the private
-//! `vulkan` module.
+//! and `bytemuck` types never appear in the public API; the in-house RHI is the
+//! private `vulkan` module.
 //!
 //! Ownership, boundaries and rules are in this crate's `AGENTS.md`.
 
@@ -34,6 +40,7 @@ mod allocator;
 mod depth;
 mod error;
 mod handle;
+mod mesh;
 #[cfg(feature = "vulkan")]
 mod renderer;
 mod shader;
@@ -53,7 +60,12 @@ pub use allocator::{
 };
 pub use depth::REVERSED_Z_CLEAR_DEPTH;
 pub use error::{RenderError, RenderErrorKind};
-pub use handle::{OffscreenTargetHandle, PipelineHandle, ShaderHandle};
+pub use handle::{MeshHandle, OffscreenTargetHandle, PipelineHandle, ShaderHandle};
+pub use mesh::{
+    CameraRelativeView, MAX_MESH_INDICES, MAX_MESH_VERTICES, MESH_PUSH_CONSTANT_BYTES,
+    MESH_PUSH_CONSTANT_RANGE, MESH_VERTEX_ATTRIBUTES, MESH_VERTEX_STRIDE, MeshDescriptor, MeshDraw,
+    MeshVertex, PackedMeshPushConstants,
+};
 #[cfg(feature = "vulkan")]
 pub use renderer::Renderer;
 pub use shader::{

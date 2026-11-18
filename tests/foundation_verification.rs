@@ -827,8 +827,14 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
         edges["spawn-platform"]
     );
     assert!(
-        edges["spawn-render"].is_empty(),
-        "spawn-render must not depend on spawn-platform or spawn-input: {:?}",
+        edges["spawn-math"].is_empty(),
+        "spawn-math must depend on no spawn-* crate: {:?}",
+        edges["spawn-math"]
+    );
+    assert_eq!(
+        edges["spawn-render"],
+        BTreeSet::from(["spawn-math".to_owned()]),
+        "spawn-render must depend only on spawn-math (never spawn-platform or spawn-input): {:?}",
         edges["spawn-render"]
     );
     assert_eq!(
@@ -856,10 +862,21 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
     );
 
     let render_headless_tree = cargo_tree(&root, &["-p", "spawn-render", "-e", "normal"])?;
+    let render_headless_crates: BTreeSet<String> = render_headless_tree
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+            trimmed.split_whitespace().next().map(str::to_owned)
+        })
+        .collect();
     assert_eq!(
-        render_headless_tree.lines().count(),
-        1,
-        "spawn-render default features must have zero normal dependencies:\n{render_headless_tree}"
+        render_headless_crates,
+        BTreeSet::from([
+            "spawn-render".to_owned(),
+            "spawn-math".to_owned(),
+            "libm".to_owned(),
+        ]),
+        "spawn-render default features must pull only pure-Rust spawn-math -> libm (zero window/GPU backends):\n{render_headless_tree}"
     );
 
     let input_tree = cargo_tree(&root, &["-p", "spawn-input", "-e", "normal"])?;

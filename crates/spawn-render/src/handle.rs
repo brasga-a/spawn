@@ -97,6 +97,12 @@ define_render_handle!(
     "OffscreenTargetHandle"
 );
 
+define_render_handle!(
+    /// Generational handle referencing an uploaded indexed 3D mesh (`DEVICE_LOCAL` vertex + index buffers).
+    MeshHandle,
+    "MeshHandle"
+);
+
 pub(crate) trait HandleType: Copy {
     const KIND: &'static str;
     fn from_raw_pool(raw: RawHandle) -> Self;
@@ -124,6 +130,16 @@ impl HandleType for PipelineHandle {
 }
 
 impl HandleType for OffscreenTargetHandle {
+    const KIND: &'static str = Self::KIND_LABEL;
+    fn from_raw_pool(raw: RawHandle) -> Self {
+        Self::from_pool(raw)
+    }
+    fn into_raw_pool(self) -> RawHandle {
+        self.raw()
+    }
+}
+
+impl HandleType for MeshHandle {
     const KIND: &'static str = Self::KIND_LABEL;
     fn from_raw_pool(raw: RawHandle) -> Self {
         Self::from_pool(raw)

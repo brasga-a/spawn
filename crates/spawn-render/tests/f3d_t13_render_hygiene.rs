@@ -1,17 +1,18 @@
-//! `F3D-T13` (Phase 3 `spawn-render` slice; `F3D-NFR-01..05`, `F3D-INV-01..04, 13..16`,
-//! `SPN-INV-006, 009, 011, 030, 033, 092, 101`): automated dependency-tree,
-//! `#![forbid(unsafe_code)]` confinement outside `src/vulkan/`, `// SAFETY:` comment
-//! audit inside `src/vulkan/`, zero `VkRenderPass`/`VkFramebuffer` enforcement,
-//! panic-free source, and public-API hygiene check.
+//! `F3D-T13` (`spawn-render` Phase 3 + Phase 4 slice; `F3D-NFR-01..05`,
+//! `F3D-INV-01..04, 13..16`, `SPN-INV-006, 009, 011, 030, 033, 052, 053, 092, 101`):
+//! automated dependency-tree, `#![forbid(unsafe_code)]` confinement outside `src/vulkan/`,
+//! `// SAFETY:` comment audit inside `src/vulkan/`, zero `VkRenderPass`/`VkFramebuffer`
+//! enforcement, panic-free source, and public-API hygiene (`bytemuck`/`ash` confinement).
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
-fn f3d_t13_spawn_render_phase_3_boundaries_safety_and_dynamic_rendering_hygiene()
+fn f3d_t13_spawn_render_boundaries_safety_and_dynamic_rendering_hygiene()
 -> Result<(), Box<dyn std::error::Error>> {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = crate_dir
@@ -19,27 +20,47 @@ fn f3d_t13_spawn_render_phase_3_boundaries_safety_and_dynamic_rendering_hygiene(
         .and_then(Path::parent)
         .ok_or("expected crates/spawn-render inside workspace root")?;
 
-    // 1. Default-feature `spawn-render` has ZERO normal dependencies (`SPN-INV-009`).
+    // 1. Default-feature `spawn-render` pulls only pure-Rust `spawn-math -> libm` (`SPN-INV-009`),
+    //    never `ash`, `bytemuck`, `raw-window-handle`, or native windowing crates.
     let headless_tree = run_cargo_tree(workspace_root, &["-p", "spawn-render", "-e", "normal"])?;
+    let headless_crates: BTreeSet<String> = headless_tree
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+            trimmed.split_whitespace().next().map(str::to_owned)
+        })
+        .collect();
     assert_eq!(
-        headless_tree.lines().count(),
-        1,
-        "spawn-render default features must have zero normal dependencies:\n{headless_tree}"
+        headless_crates,
+        BTreeSet::from([
+            "spawn-render".to_owned(),
+            "spawn-math".to_owned(),
+            "libm".to_owned(),
+        ]),
+        "spawn-render default features must pull only spawn-math -> libm:\n{headless_tree}"
     );
 
-    // 2. `spawn-render --features vulkan` never depends on `spawn-platform`, `spawn-input`,
-    //    `spawn-core`, `spawn-cli`, or `spawn-math` (Phase 4 adds `spawn-math`).
+    // 2. `spawn-render --features vulkan` pulls `spawn-math` and `bytemuck`, and never depends
+    //    on `spawn-platform`, `spawn-input`, `spawn-core`, `spawn-cli`, `wayland-client`,
+    //    `windows-sys`, or `x11rb`.
     let vulkan_tree = run_cargo_tree(
         workspace_root,
         &["-p", "spawn-render", "--features", "vulkan", "-e", "normal"],
     )?;
+    for required in ["spawn-math", "bytemuck", "ash", "raw-window-handle"] {
+        assert!(
+            vulkan_tree.contains(required),
+            "spawn-render --features vulkan expected `{required}`:\n{vulkan_tree}"
+        );
+    }
     for forbidden in [
         "spawn-platform",
         "spawn-input",
         "spawn-core",
         "spawn-cli",
-        "spawn-math",
         "wayland-client",
+        "windows-sys",
+        "x11rb",
     ] {
         assert!(
             !vulkan_tree.contains(forbidden),
@@ -137,7 +158,16 @@ fn audit_non_vulkan_file(path: &Path, content: &str) {
         "todo!(",
         "unimplemented!(",
     ];
-    const FORBIDDEN_BACKEND_PUBLIC: &[&str] = &["ash::", "vk::", "wl_", "xdg_", "zwp_"];
+    const FORBIDDEN_BACKEND_PUBLIC: &[&str] = &[
+        "ash::",
+        "vk::",
+        "bytemuck::",
+        "Pod",
+        "Zeroable",
+        "wl_",
+        "xdg_",
+        "zwp_",
+    ];
     const FORBIDDEN_GENRE_TOKENS: &[&str] = &[
         "weapon", "health", "team", "player", "vehicle", "match", "ammo", "reload", "kill",
         "score", "damage",

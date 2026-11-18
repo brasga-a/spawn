@@ -300,6 +300,22 @@ impl<'a> GraphicsPipelineDescriptor<'a> {
         }
     }
 
+    /// Creates a graphics pipeline descriptor preconfigured for `shaders/mesh_3d.slang`
+    /// (`40`-byte [`crate::MeshVertex`] binding at locations `0..=2` and `128`-byte
+    /// camera-relative `VERTEX` push constants).
+    pub const fn new_mesh_3d(
+        label: &'a str,
+        vertex_shader: ShaderHandle,
+        fragment_shader: ShaderHandle,
+    ) -> Self {
+        Self::new(label, vertex_shader, fragment_shader)
+            .with_vertex_inputs(
+                crate::mesh::MESH_VERTEX_STRIDE,
+                &crate::mesh::MESH_VERTEX_ATTRIBUTES,
+            )
+            .with_push_constants(crate::mesh::MESH_PUSH_CONSTANT_RANGE)
+    }
+
     /// Sets the target color attachment family (`Swapchain` or `OffscreenRgba8Unorm`).
     #[must_use]
     pub const fn with_target(mut self, target: PipelineTarget) -> Self {

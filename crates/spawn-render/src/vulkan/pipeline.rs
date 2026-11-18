@@ -7,7 +7,7 @@ use ash::vk;
 
 use crate::error::{RenderError, RenderErrorKind};
 use crate::shader::{
-    CookedShader, PipelineLayoutDesc, ShaderStageFlags, VertexFormat,
+    CookedShader, PipelineLayoutDesc, PushConstantRange, ShaderStageFlags, VertexFormat,
     validate_graphics_pipeline_shaders,
 };
 use crate::types::{CullMode, FrontFace, GraphicsPipelineDescriptor, PipelineTarget, SurfaceSize};
@@ -60,6 +60,9 @@ pub(crate) struct CompiledPipeline {
     pub layout: vk::PipelineLayout,
     pub target: PipelineTarget,
     pub color_format: vk::Format,
+    pub vertex_stride: u32,
+    pub push_constants: PushConstantRange,
+    pub push_stage_flags: vk::ShaderStageFlags,
 }
 
 impl CompiledPipeline {
@@ -186,12 +189,13 @@ impl CompiledPipeline {
         let fs_module = fs.ensure_module(device)?;
 
         // 5. Create `VkPipelineLayout`.
+        let push_stage_flags = stage_flags_to_vk(descriptor.push_constants.stages);
         let push_ranges = if descriptor.push_constants.size == 0 {
             Vec::new()
         } else {
             vec![
                 vk::PushConstantRange::default()
-                    .stage_flags(stage_flags_to_vk(descriptor.push_constants.stages))
+                    .stage_flags(push_stage_flags)
                     .offset(0)
                     .size(descriptor.push_constants.size),
             ]
@@ -317,6 +321,9 @@ impl CompiledPipeline {
             layout,
             target: descriptor.target,
             color_format,
+            vertex_stride: descriptor.vertex_stride,
+            push_constants: descriptor.push_constants,
+            push_stage_flags,
         })
     }
 }

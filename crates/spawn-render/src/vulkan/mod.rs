@@ -2,11 +2,12 @@
 //!
 //! Ownership and destruction order (fields of [`VulkanRenderer`]):
 //!
-//! 1. user-created resources (offscreen targets, graphics pipelines, shader modules),
-//!    swapchain-matched `D32_SFLOAT` depth image, frames (command pools, acquire
-//!    semaphores, timeline), swapchain (views, present semaphores), and the
-//!    in-house GPU block allocator (`VkDeviceMemory` blocks): destroyed explicitly
-//!    in [`VulkanRenderer::teardown`] / `Drop` after `vkDeviceWaitIdle`;
+//! 1. user-created resources (offscreen targets, uploaded 3D meshes, graphics
+//!    pipelines, shader modules), swapchain-matched `D32_SFLOAT` depth image,
+//!    frames (command pools, acquire semaphores, timeline), swapchain (views,
+//!    present semaphores), and the in-house GPU block allocator (`VkDeviceMemory`
+//!    blocks): destroyed explicitly in [`VulkanRenderer::teardown`] / `Drop`
+//!    after `vkDeviceWaitIdle`;
 //! 2. the logical device (`DeviceOwner`);
 //! 3. the presentation surface (`SurfaceOwner`);
 //! 4. the instance and validation messenger (`InstanceOwner`).
@@ -18,6 +19,7 @@ mod device;
 mod frame;
 mod instance;
 mod memory;
+mod mesh;
 mod pipeline;
 mod surface;
 mod swapchain;
@@ -29,7 +31,12 @@ use ash::vk;
 use crate::allocator::{GpuAllocatorStats, GpuMemoryBudget, MemoryDomain};
 use crate::depth::{DepthAttachmentController, DepthPlan};
 use crate::error::{RenderError, RenderErrorKind};
-use crate::handle::{GenerationalPool, OffscreenTargetHandle, PipelineHandle, ShaderHandle};
+use crate::handle::{
+    GenerationalPool, MeshHandle, OffscreenTargetHandle, PipelineHandle, ShaderHandle,
+};
+use crate::mesh::{
+    CameraRelativeView, MESH_PUSH_CONSTANT_BYTES, MESH_VERTEX_STRIDE, MeshDescriptor, MeshDraw,
+};
 use crate::presentation::{
     AcquireStatus, FramePlan, PresentStatus, PresentationController, StopReason,
 };
@@ -40,9 +47,10 @@ use crate::types::{
     ValidationMessage,
 };
 use device::DeviceOwner;
-use frame::{DrawCommand, Frames, OffscreenPassTarget, SwapchainPassTarget};
+use frame::{Frames, OffscreenPassTarget, PassDraw, SwapchainPassTarget};
 use instance::InstanceOwner;
 use memory::{VulkanBuffer, VulkanImage, VulkanMemoryAllocator};
+use mesh::{GpuMeshPushConstants, PreparedMeshDraw, UploadedMesh, prepare_mesh_staging_upload};
 use pipeline::{CompiledPipeline, LoadedShader, OffscreenTarget};
 use surface::SurfaceOwner;
 pub(crate) use surface::SurfaceSource;
@@ -103,6 +111,7 @@ pub(crate) struct VulkanRenderer {
     fatal_code: Option<&'static str>,
     torn_down: bool,
     offscreen_targets: GenerationalPool<OffscreenTargetHandle, OffscreenTarget>,
+    meshes: GenerationalPool<MeshHandle, UploadedMesh>,
     pipelines: GenerationalPool<PipelineHandle, CompiledPipeline>,
     shaders: GenerationalPool<ShaderHandle, LoadedShader>,
     swapchain_depth: Option<VulkanImage>,
@@ -139,6 +148,7 @@ impl VulkanRenderer {
             fatal_code: None,
             torn_down: false,
             offscreen_targets: GenerationalPool::new(),
+            meshes: GenerationalPool::new(),
             pipelines: GenerationalPool::new(),
             shaders: GenerationalPool::new(),
             swapchain_depth: None,
@@ -370,10 +380,106 @@ impl VulkanRenderer {
         Ok(())
     }
 
+    /// Validates `descriptor` (`SPN-INV-034`), copies vertices and `u32` indices
+    /// through a suballocated `HOST_VISIBLE | HOST_COHERENT` staging buffer into
+    /// `DEVICE_LOCAL` vertex and index buffers via `vkCmdCopyBuffer2` +
+    /// `synchronization2`, queues the staging buffer on the timeline retirement
+    /// list, and returns a generational [`MeshHandle`].
+    #[track_caller]
+    pub(crate) fn upload_mesh(
+        &mut self,
+        descriptor: &MeshDescriptor<'_>,
+    ) -> Result<MeshHandle, RenderError> {
+        self.ensure_not_stopped()?;
+        if let Ok(completed) = self.frames.completed_timeline(&self.device) {
+            self.allocator.reclaim_completed(&self.device, completed);
+        }
+        let staged = prepare_mesh_staging_upload(&self.device, &mut self.allocator, descriptor)
+            .map_err(|err| {
+                if err.kind() == RenderErrorKind::DeviceLost {
+                    self.fatal(err)
+                } else {
+                    err
+                }
+            })?;
+
+        let submit_res = self.frames.execute_mesh_staging_upload(
+            &self.device,
+            staged.staging_buffer.handle,
+            staged.mesh.vertex_buffer.handle,
+            staged.vertex_bytes,
+            staged.mesh.index_buffer.handle,
+            staged.index_bytes,
+        );
+        let upload_timeline = match submit_res {
+            Ok(val) => val,
+            Err(error) => {
+                let _ = self.device.wait_idle();
+                let _ = self.allocator.retire_buffer(
+                    &self.device,
+                    staged.mesh.index_buffer,
+                    u64::MAX,
+                    0,
+                );
+                let _ = self.allocator.retire_buffer(
+                    &self.device,
+                    staged.mesh.vertex_buffer,
+                    u64::MAX,
+                    0,
+                );
+                let _ =
+                    self.allocator
+                        .retire_buffer(&self.device, staged.staging_buffer, u64::MAX, 0);
+                return Err(self.fatal(error));
+            }
+        };
+
+        let completed = self.frames.completed_timeline(&self.device).unwrap_or(0);
+        let _ = self.allocator.retire_buffer(
+            &self.device,
+            staged.staging_buffer,
+            completed,
+            upload_timeline,
+        );
+
+        let UploadedMesh {
+            vertex_buffer,
+            index_buffer,
+            index_count,
+        } = staged.mesh;
+        match self.meshes.insert(UploadedMesh {
+            vertex_buffer,
+            index_buffer,
+            index_count,
+        }) {
+            Ok(handle) => Ok(handle),
+            Err(error) => {
+                // Unreachable unless handle generations saturate, handled cleanly.
+                Err(error)
+            }
+        }
+    }
+
+    /// Destroys a resident 3D mesh handle (`REND-0013` if stale or forged),
+    /// retiring its `DEVICE_LOCAL` vertex and index suballocations on the timeline
+    /// semaphore.
+    #[track_caller]
+    pub(crate) fn destroy_mesh(&mut self, handle: MeshHandle) -> Result<(), RenderError> {
+        self.ensure_not_stopped()?;
+        let mesh = self.meshes.remove(handle)?;
+        let completed = self.frames.completed_timeline(&self.device).unwrap_or(0);
+        let last_sub = self.frames.last_submitted();
+        self.allocator
+            .retire_buffer(&self.device, mesh.index_buffer, completed, last_sub)?;
+        self.allocator
+            .retire_buffer(&self.device, mesh.vertex_buffer, completed, last_sub)?;
+        Ok(())
+    }
+
     /// Clears the next swapchain image to `color` (and its `D32_SFLOAT` depth to `0.0`)
     /// and presents it.
     pub(crate) fn render_clear(&mut self, color: ClearColor) -> Result<FrameOutcome, RenderError> {
-        self.render_swapchain_internal(color, None)
+        self.render_swapchain_internal(color, PassDraw::None, None)
     }
 
     /// Clears the next swapchain image to `clear_color` and `D32_SFLOAT` depth to `0.0`,
@@ -386,25 +492,56 @@ impl VulkanRenderer {
         vertex_count: u32,
     ) -> Result<FrameOutcome, RenderError> {
         self.ensure_not_stopped()?;
-        let compiled = self.pipelines.get(pipeline)?;
-        if compiled.target != PipelineTarget::Swapchain {
-            return Err(
-                RenderError::new(RenderErrorKind::InvalidResourceDescriptor).with_detail(
-                    "render_triangle requires a pipeline created with `PipelineTarget::Swapchain`",
-                ),
-            );
-        }
-        let vk_pipeline = compiled.pipeline;
-        let expected_format = compiled.color_format;
+        let (vk_pipeline, expected_format) = {
+            let compiled = self.pipelines.get(pipeline)?;
+            if compiled.target != PipelineTarget::Swapchain {
+                return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                    .with_detail(
+                        "render_triangle requires a pipeline created with `PipelineTarget::Swapchain`",
+                    ));
+            }
+            if compiled.vertex_stride != 0 || compiled.push_constants.size != 0 {
+                return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                    .with_detail(
+                        "render_triangle requires an unindexed pipeline with 0 vertex inputs and 0 push constants",
+                    ));
+            }
+            (compiled.pipeline, compiled.color_format)
+        };
         self.render_swapchain_internal(
             clear_color,
-            Some((
-                DrawCommand {
-                    pipeline: vk_pipeline,
-                    vertex_count,
-                },
-                expected_format,
-            )),
+            PassDraw::Unindexed {
+                pipeline: vk_pipeline,
+                vertex_count,
+            },
+            Some(expected_format),
+        )
+    }
+
+    /// Clears the next swapchain image to `clear_color` and `D32_SFLOAT` depth to `0.0`,
+    /// draws `draws` as camera-relative indexed 3D meshes (`SPN-INV-052`) with `pipeline`,
+    /// and presents the frame.
+    #[track_caller]
+    pub(crate) fn render_meshes(
+        &mut self,
+        pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<FrameOutcome, RenderError> {
+        self.ensure_not_stopped()?;
+        let (vk_pipeline, vk_layout, push_stage_flags, expected_format) =
+            self.validate_mesh_pipeline(pipeline, PipelineTarget::Swapchain, "render_meshes")?;
+        let prepared = self.prepare_mesh_draws(view, draws)?;
+        self.render_swapchain_internal(
+            clear_color,
+            PassDraw::IndexedMeshes {
+                pipeline: vk_pipeline,
+                layout: vk_layout,
+                push_stage_flags,
+                draws: &prepared,
+            },
+            Some(expected_format),
         )
     }
 
@@ -420,13 +557,133 @@ impl VulkanRenderer {
         vertex_count: u32,
     ) -> Result<OffscreenReadback, RenderError> {
         self.ensure_not_stopped()?;
-        let compiled = self.pipelines.get(pipeline)?;
-        if compiled.target != PipelineTarget::OffscreenRgba8Unorm {
-            return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
-                .with_detail("render_offscreen_triangle requires a pipeline created with `PipelineTarget::OffscreenRgba8Unorm`"));
-        }
-        let vk_pipeline = compiled.pipeline;
+        let vk_pipeline = {
+            let compiled = self.pipelines.get(pipeline)?;
+            if compiled.target != PipelineTarget::OffscreenRgba8Unorm {
+                return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                    .with_detail("render_offscreen_triangle requires a pipeline created with `PipelineTarget::OffscreenRgba8Unorm`"));
+            }
+            if compiled.vertex_stride != 0 || compiled.push_constants.size != 0 {
+                return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                    .with_detail("render_offscreen_triangle requires an unindexed pipeline with 0 vertex inputs and 0 push constants"));
+            }
+            compiled.pipeline
+        };
+        self.execute_offscreen_pass(
+            target,
+            clear_color,
+            PassDraw::Unindexed {
+                pipeline: vk_pipeline,
+                vertex_count,
+            },
+        )
+    }
 
+    /// Clears `target` (`R8G8B8A8_UNORM` + `D32_SFLOAT` reversed-Z clear `0.0`),
+    /// draws `draws` as camera-relative indexed 3D meshes (`SPN-INV-052`) with `pipeline`,
+    /// and reads back the linear RGBA8 image through a suballocated
+    /// `HOST_VISIBLE | HOST_COHERENT` buffer (`vkCmdCopyImageToBuffer2`).
+    #[track_caller]
+    pub(crate) fn render_offscreen_meshes(
+        &mut self,
+        target: OffscreenTargetHandle,
+        pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<OffscreenReadback, RenderError> {
+        self.ensure_not_stopped()?;
+        let (vk_pipeline, vk_layout, push_stage_flags, _) = self.validate_mesh_pipeline(
+            pipeline,
+            PipelineTarget::OffscreenRgba8Unorm,
+            "render_offscreen_meshes",
+        )?;
+        let prepared = self.prepare_mesh_draws(view, draws)?;
+        self.execute_offscreen_pass(
+            target,
+            clear_color,
+            PassDraw::IndexedMeshes {
+                pipeline: vk_pipeline,
+                layout: vk_layout,
+                push_stage_flags,
+                draws: &prepared,
+            },
+        )
+    }
+
+    #[track_caller]
+    fn validate_mesh_pipeline(
+        &self,
+        pipeline: PipelineHandle,
+        expected_target: PipelineTarget,
+        caller: &'static str,
+    ) -> Result<
+        (
+            vk::Pipeline,
+            vk::PipelineLayout,
+            vk::ShaderStageFlags,
+            vk::Format,
+        ),
+        RenderError,
+    > {
+        let compiled = self.pipelines.get(pipeline)?;
+        if compiled.target != expected_target {
+            return Err(
+                RenderError::new(RenderErrorKind::InvalidResourceDescriptor).with_detail(format!(
+                    "{caller} requires a pipeline created with `PipelineTarget::{expected_target:?}`"
+                )),
+            );
+        }
+        if compiled.vertex_stride != MESH_VERTEX_STRIDE
+            || compiled.push_constants.size != MESH_PUSH_CONSTANT_BYTES
+        {
+            return Err(
+                RenderError::new(RenderErrorKind::InvalidResourceDescriptor).with_detail(format!(
+                    "{caller} requires a 3D mesh pipeline (`vertex_stride == {MESH_VERTEX_STRIDE}`, \
+                     `push_constants.size == {MESH_PUSH_CONSTANT_BYTES}`), got stride {} and push_constants {}",
+                    compiled.vertex_stride, compiled.push_constants.size
+                )),
+            );
+        }
+        Ok((
+            compiled.pipeline,
+            compiled.layout,
+            compiled.push_stage_flags,
+            compiled.color_format,
+        ))
+    }
+
+    #[track_caller]
+    fn prepare_mesh_draws(
+        &self,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<Vec<PreparedMeshDraw>, RenderError> {
+        if !view.projection.is_finite() || !view.camera_rotation.is_finite() {
+            return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("CameraRelativeView contains NaN or infinite values"));
+        }
+        let mut prepared = Vec::with_capacity(draws.len());
+        for draw in draws {
+            let uploaded = self.meshes.get(draw.mesh)?;
+            let packed = draw.pack_push_constants(view)?;
+            prepared.push(PreparedMeshDraw {
+                vertex_buffer: uploaded.vertex_buffer.handle,
+                index_buffer: uploaded.index_buffer.handle,
+                index_count: uploaded.index_count,
+                push_constants: GpuMeshPushConstants::from_packed(&packed),
+            });
+        }
+        Ok(prepared)
+    }
+
+    #[track_caller]
+    fn execute_offscreen_pass(
+        &mut self,
+        target: OffscreenTargetHandle,
+        clear_color: ClearColor,
+        draw: PassDraw<'_>,
+    ) -> Result<OffscreenReadback, RenderError> {
         let (extent, color_image, color_view, depth_image, depth_view) = {
             let offscreen = self.offscreen_targets.get(target)?;
             (
@@ -474,14 +731,9 @@ impl VulkanRenderer {
             readback_bytes: byte_len_u64,
         };
 
-        let submit_res = self.frames.execute_offscreen_draw_and_copy(
-            &self.device,
-            &pass_target,
-            DrawCommand {
-                pipeline: vk_pipeline,
-                vertex_count,
-            },
-        );
+        let submit_res =
+            self.frames
+                .execute_offscreen_draw_and_copy(&self.device, &pass_target, draw);
 
         let signaled_value = match submit_res {
             Ok(val) => val,
@@ -517,7 +769,8 @@ impl VulkanRenderer {
     fn render_swapchain_internal(
         &mut self,
         color: ClearColor,
-        draw: Option<(DrawCommand, vk::Format)>,
+        draw: PassDraw<'_>,
+        expected_format: Option<vk::Format>,
     ) -> Result<FrameOutcome, RenderError> {
         let Some(plan) = self.controller.plan() else {
             return Err(self.stopped_error());
@@ -536,13 +789,14 @@ impl VulkanRenderer {
             }
             FramePlan::Acquire => {}
         }
-        self.draw_swapchain(color, draw)
+        self.draw_swapchain(color, draw, expected_format)
     }
 
     fn draw_swapchain(
         &mut self,
         color: ClearColor,
-        draw: Option<(DrawCommand, vk::Format)>,
+        draw: PassDraw<'_>,
+        expected_format: Option<vk::Format>,
     ) -> Result<FrameOutcome, RenderError> {
         let ticket = self
             .frames
@@ -565,7 +819,7 @@ impl VulkanRenderer {
             return Ok(FrameOutcome::Skipped);
         };
 
-        if let Some((_, expected_format)) = draw
+        if let Some(expected_format) = expected_format
             && expected_format != sc_format
         {
             return Err(
@@ -633,12 +887,7 @@ impl VulkanRenderer {
         };
         let recorded = self
             .frames
-            .record_swapchain_pass(
-                &self.device,
-                &ticket,
-                &pass_target,
-                draw.map(|(cmd, _)| cmd),
-            )
+            .record_swapchain_pass(&self.device, &ticket, &pass_target, draw)
             .and_then(|()| self.frames.submit(&self.device, ticket, present));
         recorded.map_err(|error| self.fatal(error))?;
 
@@ -886,6 +1135,14 @@ impl VulkanRenderer {
             let _ = self
                 .allocator
                 .retire_image(&self.device, target.color, u64::MAX, 0);
+        }
+        for mesh in self.meshes.drain_all() {
+            let _ = self
+                .allocator
+                .retire_buffer(&self.device, mesh.index_buffer, u64::MAX, 0);
+            let _ = self
+                .allocator
+                .retire_buffer(&self.device, mesh.vertex_buffer, u64::MAX, 0);
         }
         for compiled in self.pipelines.drain_all() {
             self.allocator.retire_pipeline(

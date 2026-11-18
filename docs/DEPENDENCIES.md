@@ -70,7 +70,7 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 | `glam` | MIT/Apache-2.0 | oracle | `spawn-math` tests | Compare math results | yes (`spawn-math` dev-dependency) |
 | `crossbeam-deque` | MIT/Apache-2.0 | dep | `spawn-jobs` | Work-stealing deques ([ADR-0012](adr/0012-job-system.md)) | no |
 | `crossbeam-utils` | MIT/Apache-2.0 | dep | `spawn-jobs` | Cache padding, utilities | no |
-| `bytemuck` | MIT/Apache-2.0/Zlib | dep | `spawn-render`, `spawn-assets`, `spawn-math` | Safe plain-data byte casting | no |
+| `bytemuck` | MIT/Apache-2.0/Zlib | dep | `spawn-render`, `spawn-assets`, `spawn-math` | Safe plain-data byte casting | yes (`spawn-render`, feature `vulkan`; 1.25, `derive`) |
 | `bumpalo` | MIT/Apache-2.0 | dep | crates with per-frame data | Frame arenas ([ADR-0020](adr/0020-memory-strategy.md)) | no |
 | `smallvec` | MIT/Apache-2.0 | dep | any | Small inline vectors | no |
 | `arrayvec` | MIT/Apache-2.0 | dep | any | Fixed-capacity vectors | no |

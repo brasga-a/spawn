@@ -1,9 +1,9 @@
-//! Frames in flight: command recording and CPU/GPU synchronization.
+//! Frames in flight: command recording, staging uploads, and CPU/GPU synchronization.
 //!
 //! Synchronization strategy:
 //!
-//! - One **timeline semaphore** counts submitted passes. Submission `n` signals
-//!   value `n`; before a frame slot is reused, the CPU waits until the
+//! - One **timeline semaphore** counts submitted passes/uploads. Submission `n`
+//!   signals value `n`; before a frame slot is reused, the CPU waits until the
 //!   timeline reaches the value that slot last signaled, so its command buffer
 //!   and acquire semaphore are no longer in use.
 //! - Each slot has a binary **acquire semaphore** (signaled by the
@@ -12,7 +12,10 @@
 //! - Each swapchain image has a binary **present semaphore** (signaled by the
 //!   submission at `ALL_COMMANDS` after the present layout transition, waited
 //!   by presentation); see `Swapchain`.
-//! - Layout transitions use `synchronization2` barriers:
+//! - Layout transitions and buffer transfers use `synchronization2` barriers:
+//!   - Mesh staging upload: `vkCmdCopyBuffer2` followed by `COPY (TRANSFER_WRITE)`
+//!     → `VERTEX_ATTRIBUTE_INPUT (VERTEX_ATTRIBUTE_READ)` and
+//!     `INDEX_INPUT (INDEX_READ)` `VkBufferMemoryBarrier2`s.
 //!   - Swapchain color: `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, then
 //!     `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR`.
 //!   - Reversed-Z `D32_SFLOAT` depth: `UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL`
@@ -29,6 +32,7 @@ use crate::depth::REVERSED_Z_CLEAR_DEPTH;
 use crate::error::{RenderError, RenderErrorKind};
 use crate::types::SurfaceSize;
 use crate::vulkan::device::DeviceOwner;
+use crate::vulkan::mesh::PreparedMeshDraw;
 use crate::vulkan::swapchain::{color_range, depth_range};
 use crate::vulkan::vk_error;
 
@@ -46,11 +50,20 @@ struct FrameSlot {
     submitted: u64,
 }
 
-/// Optional graphics draw inside a dynamic-rendering pass.
+/// Graphics draw workload inside a dynamic-rendering pass.
 #[derive(Clone, Copy)]
-pub(crate) struct DrawCommand {
-    pub pipeline: vk::Pipeline,
-    pub vertex_count: u32,
+pub(crate) enum PassDraw<'a> {
+    None,
+    Unindexed {
+        pipeline: vk::Pipeline,
+        vertex_count: u32,
+    },
+    IndexedMeshes {
+        pipeline: vk::Pipeline,
+        layout: vk::PipelineLayout,
+        push_stage_flags: vk::ShaderStageFlags,
+        draws: &'a [PreparedMeshDraw],
+    },
 }
 
 /// Swapchain render target bindings for one frame.
@@ -183,14 +196,101 @@ impl Frames {
         Ok(FrameTicket { index, acquire })
     }
 
+    /// Records `vkCmdCopyBuffer2` staging copies for `vertex_buffer` (`[0..vertex_bytes)`)
+    /// and `index_buffer` (`[vertex_bytes..vertex_bytes + index_bytes)`), places
+    /// `synchronization2` `VkBufferMemoryBarrier2`s ordering `COPY (TRANSFER_WRITE)`
+    /// before `VERTEX_ATTRIBUTE_INPUT` and `INDEX_INPUT`, and submits on `device.queue`
+    /// signaling the timeline semaphore. Returns the signaled timeline value so the
+    /// caller can queue `staging_buffer` on the timeline retirement list without stalling.
+    pub(crate) fn execute_mesh_staging_upload(
+        &mut self,
+        device: &DeviceOwner,
+        staging_buffer: vk::Buffer,
+        vertex_buffer: vk::Buffer,
+        vertex_bytes: u64,
+        index_buffer: vk::Buffer,
+        index_bytes: u64,
+    ) -> Result<u64, RenderError> {
+        let ticket = self.begin(device)?;
+        let commands_handle = self.slot(&ticket)?.commands;
+        let pool_handle = self.slot(&ticket)?.pool;
+        let vk_device = &device.device;
+
+        // SAFETY: `begin` waited for this slot's previous submission to complete.
+        unsafe { vk_device.reset_command_pool(pool_handle, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|result| vk_error("vkResetCommandPool", result))?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: `commands_handle` is in initial state after resetting `pool_handle`.
+        unsafe { vk_device.begin_command_buffer(commands_handle, &begin_info) }
+            .map_err(|result| vk_error("vkBeginCommandBuffer", result))?;
+
+        let vb_regions = [vk::BufferCopy2::default()
+            .src_offset(0)
+            .dst_offset(0)
+            .size(vertex_bytes)];
+        let vb_copy = vk::CopyBufferInfo2::default()
+            .src_buffer(staging_buffer)
+            .dst_buffer(vertex_buffer)
+            .regions(&vb_regions);
+
+        let ib_regions = [vk::BufferCopy2::default()
+            .src_offset(vertex_bytes)
+            .dst_offset(0)
+            .size(index_bytes)];
+        let ib_copy = vk::CopyBufferInfo2::default()
+            .src_buffer(staging_buffer)
+            .dst_buffer(index_buffer)
+            .regions(&ib_regions);
+
+        let post_copy_barriers = [
+            vk::BufferMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT)
+                .dst_access_mask(vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .buffer(vertex_buffer)
+                .offset(0)
+                .size(vertex_bytes),
+            vk::BufferMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::INDEX_INPUT)
+                .dst_access_mask(vk::AccessFlags2::INDEX_READ)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .buffer(index_buffer)
+                .offset(0)
+                .size(index_bytes),
+        ];
+
+        // SAFETY: `commands_handle` is recording; `staging_buffer`, `vertex_buffer`, and
+        // `index_buffer` belong to `device` and stay alive until this timeline value completes.
+        unsafe {
+            vk_device.cmd_copy_buffer2(commands_handle, &vb_copy);
+            vk_device.cmd_copy_buffer2(commands_handle, &ib_copy);
+            vk_device.cmd_pipeline_barrier2(
+                commands_handle,
+                &vk::DependencyInfo::default().buffer_memory_barriers(&post_copy_barriers),
+            );
+            vk_device
+                .end_command_buffer(commands_handle)
+                .map_err(|result| vk_error("vkEndCommandBuffer", result))?;
+        }
+
+        self.submit_timeline_only(device, ticket, commands_handle)
+    }
+
     /// Records a swapchain dynamic-rendering pass (color clear + `D32_SFLOAT`
-    /// reversed-Z depth clear to `0.0` + optional triangle/mesh draw) into `ticket`.
+    /// reversed-Z depth clear to `0.0` + optional unindexed or indexed 3D draws) into `ticket`.
     pub(crate) fn record_swapchain_pass(
         &self,
         device: &DeviceOwner,
         ticket: &FrameTicket,
         target: &SwapchainPassTarget,
-        draw: Option<DrawCommand>,
+        draw: PassDraw<'_>,
     ) -> Result<(), RenderError> {
         let slot = self.slot(ticket)?;
         let vk_device = &device.device;
@@ -279,17 +379,15 @@ impl Frames {
             .subresource_range(color_range())];
 
         // SAFETY: the command buffer is recording; color and depth images/views
-        // and any bound pipeline belong to `device` and stay alive until this
-        // submission completes on the timeline semaphore.
+        // and any bound pipeline/mesh buffers belong to `device` and stay alive
+        // until this submission completes on the timeline semaphore.
         unsafe {
             vk_device.cmd_pipeline_barrier2(
                 slot.commands,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_attachments),
             );
             vk_device.cmd_begin_rendering(slot.commands, &rendering);
-            if let Some(cmd) = draw {
-                record_viewport_scissor_and_draw(vk_device, slot.commands, target.extent, cmd);
-            }
+            record_pass_draws(vk_device, slot.commands, target.extent, draw);
             vk_device.cmd_end_rendering(slot.commands);
             vk_device.cmd_pipeline_barrier2(
                 slot.commands,
@@ -302,15 +400,15 @@ impl Frames {
     }
 
     /// Records an offscreen `R8G8B8A8_UNORM` + `D32_SFLOAT` reversed-Z dynamic-rendering
-    /// draw, transitions color to `TRANSFER_SRC_OPTIMAL`, copies into `target.readback_buffer`
-    /// via `vkCmdCopyImageToBuffer2`, orders `COPY -> HOST_READ`, submits on `device.queue`
-    /// signaling the timeline semaphore, and waits for completion. Returns the signaled
-    /// timeline value.
+    /// pass (`unindexed` or `indexed` 3D meshes), transitions color to `TRANSFER_SRC_OPTIMAL`,
+    /// copies into `target.readback_buffer` via `vkCmdCopyImageToBuffer2`, orders
+    /// `COPY -> HOST_READ`, submits on `device.queue` signaling the timeline semaphore,
+    /// and waits for completion. Returns the signaled timeline value.
     pub(crate) fn execute_offscreen_draw_and_copy(
         &mut self,
         device: &DeviceOwner,
         target: &OffscreenPassTarget,
-        draw: DrawCommand,
+        draw: PassDraw<'_>,
     ) -> Result<u64, RenderError> {
         let ticket = self.begin(device)?;
         let commands_handle = self.slot(&ticket)?.commands;
@@ -438,15 +536,16 @@ impl Frames {
             .offset(0)
             .size(target.readback_bytes)];
 
-        // SAFETY: `commands_handle` is recording, offscreen images/views, pipeline,
-        // and `readback_buffer` belong to `device` and stay alive through `wait_timeline` below.
+        // SAFETY: `commands_handle` is recording; offscreen images/views, pipeline,
+        // mesh buffers, and `readback_buffer` belong to `device` and stay alive
+        // through `wait_timeline` below.
         unsafe {
             vk_device.cmd_pipeline_barrier2(
                 commands_handle,
                 &vk::DependencyInfo::default().image_memory_barriers(&pre_render_barriers),
             );
             vk_device.cmd_begin_rendering(commands_handle, &rendering);
-            record_viewport_scissor_and_draw(vk_device, commands_handle, target.extent, draw);
+            record_pass_draws(vk_device, commands_handle, target.extent, draw);
             vk_device.cmd_end_rendering(commands_handle);
             vk_device.cmd_pipeline_barrier2(
                 commands_handle,
@@ -462,6 +561,19 @@ impl Frames {
                 .map_err(|result| vk_error("vkEndCommandBuffer", result))?;
         }
 
+        let value = self.submit_timeline_only(device, ticket, commands_handle)?;
+        self.wait_timeline(device, value)?;
+        Ok(value)
+    }
+
+    /// Submits `commands_handle` with no swapchain semaphores, signaling only the
+    /// next timeline value at `ALL_COMMANDS`.
+    fn submit_timeline_only(
+        &mut self,
+        device: &DeviceOwner,
+        ticket: FrameTicket,
+        commands_handle: vk::CommandBuffer,
+    ) -> Result<u64, RenderError> {
         let value = self.last_submitted.saturating_add(1);
         let cmd_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(commands_handle)];
         let signals = [vk::SemaphoreSubmitInfo::default()
@@ -474,16 +586,18 @@ impl Frames {
 
         // SAFETY: `commands_handle` is executable, `self.timeline` belongs to `device`,
         // and `device.queue` is accessed exclusively on this thread.
-        unsafe { vk_device.queue_submit2(device.queue, &submit, vk::Fence::null()) }
-            .map_err(|result| vk_error("vkQueueSubmit2 (offscreen)", result))?;
+        unsafe {
+            device
+                .device
+                .queue_submit2(device.queue, &submit, vk::Fence::null())
+        }
+        .map_err(|result| vk_error("vkQueueSubmit2 (timeline)", result))?;
 
         self.last_submitted = value;
         if let Some(slot) = self.slots.get_mut(ticket.index) {
             slot.submitted = value;
         }
         self.next = (ticket.index + 1) % FRAMES_IN_FLIGHT;
-
-        self.wait_timeline(device, value)?;
         Ok(value)
     }
 
@@ -556,14 +670,14 @@ impl Frames {
     }
 }
 
-/// Binds `draw.pipeline`, configures a positive-height `[0.0, 1.0]` `VkViewport`
-/// (never flipping Y in viewport; `SPN-INV-053`) and full-extent `VkRect2D`
-/// scissor, and records `vkCmdDraw`.
-fn record_viewport_scissor_and_draw(
+/// Binds the pass's graphics pipeline, configures a positive-height `[0.0, 1.0]`
+/// `VkViewport` (`SPN-INV-053`: never flipping Y in viewport) and full-extent
+/// `VkRect2D` scissor, and records either an unindexed draw or indexed 3D mesh draws.
+fn record_pass_draws(
     vk_device: &ash::Device,
     commands: vk::CommandBuffer,
     extent: SurfaceSize,
-    draw: DrawCommand,
+    draw: PassDraw<'_>,
 ) {
     let viewports = [vk::Viewport {
         x: 0.0,
@@ -580,15 +694,59 @@ fn record_viewport_scissor_and_draw(
             height: extent.height,
         },
     }];
-    // SAFETY: `commands` is inside an active `cmd_begin_rendering` pass matching
-    // `draw.pipeline`'s color and `D32_SFLOAT` depth formats, with dynamic
-    // `VIEWPORT` and `SCISSOR` states enabled on `draw.pipeline`.
-    unsafe {
-        vk_device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, draw.pipeline);
-        vk_device.cmd_set_viewport(commands, 0, &viewports);
-        vk_device.cmd_set_scissor(commands, 0, &scissors);
-        if draw.vertex_count > 0 {
-            vk_device.cmd_draw(commands, draw.vertex_count, 1, 0, 0);
+
+    match draw {
+        PassDraw::None => {}
+        PassDraw::Unindexed {
+            pipeline,
+            vertex_count,
+        } => {
+            // SAFETY: `commands` is inside an active `cmd_begin_rendering` pass matching
+            // `pipeline`'s color and `D32_SFLOAT` depth formats, with dynamic `VIEWPORT`
+            // and `SCISSOR` states enabled on `pipeline`.
+            unsafe {
+                vk_device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                vk_device.cmd_set_viewport(commands, 0, &viewports);
+                vk_device.cmd_set_scissor(commands, 0, &scissors);
+                if vertex_count > 0 {
+                    vk_device.cmd_draw(commands, vertex_count, 1, 0, 0);
+                }
+            }
+        }
+        PassDraw::IndexedMeshes {
+            pipeline,
+            layout,
+            push_stage_flags,
+            draws,
+        } => {
+            // SAFETY: `commands` is inside an active `cmd_begin_rendering` pass matching
+            // `pipeline`; `push_stage_flags` matches `layout`'s `VkPushConstantRange`
+            // (`128` bytes), and each `PreparedMeshDraw`'s `DEVICE_LOCAL` vertex/index
+            // buffers belong to `vk_device` and stay alive until timeline completion.
+            unsafe {
+                vk_device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                vk_device.cmd_set_viewport(commands, 0, &viewports);
+                vk_device.cmd_set_scissor(commands, 0, &scissors);
+                for item in draws {
+                    vk_device.cmd_push_constants(
+                        commands,
+                        layout,
+                        push_stage_flags,
+                        0,
+                        bytemuck::bytes_of(&item.push_constants),
+                    );
+                    let vbs = [item.vertex_buffer];
+                    let offsets = [0_u64];
+                    vk_device.cmd_bind_vertex_buffers(commands, 0, &vbs, &offsets);
+                    vk_device.cmd_bind_index_buffer(
+                        commands,
+                        item.index_buffer,
+                        0,
+                        vk::IndexType::UINT32,
+                    );
+                    vk_device.cmd_draw_indexed(commands, item.index_count, 1, 0, 0, 0);
+                }
+            }
         }
     }
 }
