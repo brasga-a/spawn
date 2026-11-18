@@ -502,6 +502,71 @@ fn f3d_t01_trs_shear_rejection_composition_and_negative_scale_roundtrip() {
     );
     assert_eq!(Transform::IDENTITY.try_mul_transform(nan_transform), None);
 
+    // Compatible non-uniform scale (2, 1, 2) + Y-axis rotation commutes and stays shear-free!
+    let parent_212 = Transform::new(
+        Vec3::new(3.0, -4.0, 2.0),
+        Quat::from_yaw_pitch(0.3, -0.2),
+        Vec3::new(2.0, 1.0, 2.0),
+    );
+    let child_y = Transform::new(
+        Vec3::new(-1.0, 2.5, 0.5),
+        Quat::from_rotation_y(0.75),
+        Vec3::new(1.25, 0.5, 2.5),
+    );
+    let composed_212 = parent_212
+        .try_mul_transform(child_y)
+        .expect("(2, 1, 2) parent + Y-rotation child must compose without shear");
+    assert!(
+        composed_212
+            .to_mat4()
+            .abs_diff_eq(&parent_212.mul_mat4(child_y), 1.0e-4)
+    );
+    let inv_212 = Transform::new(
+        Vec3::new(1.0, -2.0, 3.0),
+        Quat::from_rotation_y(-0.75),
+        Vec3::new(2.0, 1.0, 2.0),
+    )
+    .try_inverse()
+    .expect("(2, 1, 2) + Y-rotation transform must invert without shear");
+    assert!(
+        (inv_212.to_mat4()
+            * Transform::new(
+                Vec3::new(1.0, -2.0, 3.0),
+                Quat::from_rotation_y(-0.75),
+                Vec3::new(2.0, 1.0, 2.0),
+            )
+            .to_mat4())
+        .abs_diff_eq(&Mat4::IDENTITY, 1.0e-4)
+    );
+
+    // Distinct non-uniform scale (2, 1, 0.5) + 90° Z-axis permutation succeeds in both compose and inverse!
+    let perm_child = Transform::new(
+        Vec3::new(0.5, -1.0, 2.0),
+        Quat::from_rotation_z(FRAC_PI_2),
+        Vec3::new(1.0, 3.0, 0.5),
+    );
+    let composed_perm = parent_non_uniform
+        .try_mul_transform(perm_child)
+        .expect("90° axis-permutation child must compose without shear");
+    assert!(
+        composed_perm
+            .to_mat4()
+            .abs_diff_eq(&parent_non_uniform.mul_mat4(perm_child), 1.0e-4)
+    );
+
+    // Small-scale 10x non-uniformity (1e-6, 1e-6, 1e-5) with 45° X rotation must be rejected.
+    let tiny_non_uniform = Transform::new(
+        Vec3::ZERO,
+        Quat::from_rotation_x(FRAC_PI_4),
+        Vec3::new(1.0e-6, 1.0e-6, 1.0e-5),
+    );
+    assert_eq!(tiny_non_uniform.try_inverse(), None);
+    assert_eq!(
+        Transform::from_scale(Vec3::new(1.0e-6, 1.0e-6, 1.0e-5))
+            .try_mul_transform(Transform::from_rotation(Quat::from_rotation_x(FRAC_PI_4))),
+        None
+    );
+
     // 4. Valid negative-scale shear-free TRS `to_mat4()` -> `try_from_mat4()` round-trip across all
     //    7 negative-axis sign combinations (including odd reflections where `sx` absorbs `det.signum()`).
     let base_rot = Quat::from_yaw_pitch_roll(0.65, -0.4, 0.3);
@@ -775,5 +840,91 @@ proptest! {
         let recovered = Transform::try_from_mat4(signed_m4).unwrap();
         prop_assert!(recovered.rotation.is_normalized());
         prop_assert!(recovered.to_mat4().abs_diff_eq(&signed_m4, 1.0e-3));
+    }
+
+    #[test]
+    fn f3d_t01_prop_compatible_trs_composition_and_inverse(
+        p_tx in -25.0_f32..25.0,
+        p_ty in -25.0_f32..25.0,
+        p_tz in -25.0_f32..25.0,
+        c_tx in -25.0_f32..25.0,
+        c_ty in -25.0_f32..25.0,
+        c_tz in -25.0_f32..25.0,
+        p_yaw in -PI..PI,
+        p_pitch in -1.3_f32..1.3,
+        c_yaw in -PI..PI,
+        c_pitch in -1.3_f32..1.3,
+        c_roll in -PI..PI,
+        xz_mag in 0.25_f32..4.0,
+        y_mag in 0.25_f32..4.0,
+        u_mag in 0.25_f32..4.0,
+        neg_x in any::<bool>(),
+        neg_y in any::<bool>(),
+        neg_z in any::<bool>(),
+        csx in 0.25_f32..3.0,
+        csy in 0.25_f32..3.0,
+        csz in 0.25_f32..3.0,
+    ) {
+        let p_trans = Vec3::new(p_tx, p_ty, p_tz);
+        let c_trans = Vec3::new(c_tx, c_ty, c_tz);
+        let p_rot = Quat::from_yaw_pitch(p_yaw, p_pitch);
+        let c_scale = Vec3::new(csx, csy, csz);
+
+        // 1. Compatible planar-uniform non-uniform scale `(±xz, ±y, ±xz)` + Y-axis rotation:
+        //    both composition and inverse succeed and match matrix semantics.
+        let planar_scale = Vec3::new(
+            if neg_x { -xz_mag } else { xz_mag },
+            if neg_y { -y_mag } else { y_mag },
+            if neg_z { -xz_mag } else { xz_mag },
+        );
+        let parent_planar = Transform::new(p_trans, p_rot, planar_scale);
+        let child_y = Transform::new(c_trans, Quat::from_rotation_y(c_yaw), c_scale);
+        let composed_planar = parent_planar.try_mul_transform(child_y).unwrap();
+        prop_assert!(composed_planar.rotation.is_normalized());
+        prop_assert!(composed_planar.to_mat4().abs_diff_eq(&parent_planar.mul_mat4(child_y), 5.0e-3));
+
+        let y_rot_trs = Transform::new(p_trans, Quat::from_rotation_y(c_yaw), planar_scale);
+        let y_inv = y_rot_trs.try_inverse().unwrap();
+        prop_assert!((y_rot_trs.to_mat4() * y_inv.to_mat4()).abs_diff_eq(&Mat4::IDENTITY, 1.0e-3));
+        let y_round = y_rot_trs.try_mul_transform(y_inv).unwrap();
+        prop_assert!(y_round.to_mat4().abs_diff_eq(&Mat4::IDENTITY, 1.0e-3));
+
+        // 2. Signed uniform-magnitude scale `(±u, ±u, ±u)` + arbitrary 3-axis rotation:
+        //    both composition and inverse succeed regardless of reflection signs.
+        let signed_uniform_scale = Vec3::new(
+            if neg_x { -u_mag } else { u_mag },
+            if neg_y { -u_mag } else { u_mag },
+            if neg_z { -u_mag } else { u_mag },
+        );
+        let parent_signed_u = Transform::new(p_trans, p_rot, signed_uniform_scale);
+        let child_3d = Transform::new(
+            c_trans,
+            Quat::from_yaw_pitch_roll(c_yaw, c_pitch, c_roll),
+            c_scale,
+        );
+        let composed_su = parent_signed_u.try_mul_transform(child_3d).unwrap();
+        prop_assert!(composed_su.to_mat4().abs_diff_eq(&parent_signed_u.mul_mat4(child_3d), 5.0e-3));
+
+        let signed_u_trs = Transform::new(
+            p_trans,
+            Quat::from_yaw_pitch_roll(c_yaw, c_pitch, c_roll),
+            signed_uniform_scale,
+        );
+        let su_inv = signed_u_trs.try_inverse().unwrap();
+        prop_assert!((signed_u_trs.to_mat4() * su_inv.to_mat4()).abs_diff_eq(&Mat4::IDENTITY, 1.0e-3));
+        let su_round = signed_u_trs.try_mul_transform(su_inv).unwrap();
+        prop_assert!(su_round.to_mat4().abs_diff_eq(&Mat4::IDENTITY, 1.0e-3));
+
+        // 3. Zero-false-positive soundness invariant on arbitrary transforms:
+        //    if `try_mul_transform` or `try_inverse` returns `Some`, it MUST match `Mat4`!
+        let arbitrary_parent = Transform::new(p_trans, p_rot, Vec3::new(xz_mag, y_mag, u_mag));
+        if let Some(composed) = arbitrary_parent.try_mul_transform(child_3d) {
+            prop_assert!(composed.rotation.is_normalized());
+            prop_assert!(composed.to_mat4().abs_diff_eq(&arbitrary_parent.mul_mat4(child_3d), 5.0e-3));
+        }
+        if let Some(inv) = arbitrary_parent.try_inverse() {
+            prop_assert!(inv.rotation.is_normalized());
+            prop_assert!((arbitrary_parent.to_mat4() * inv.to_mat4()).abs_diff_eq(&Mat4::IDENTITY, 1.0e-3));
+        }
     }
 }
