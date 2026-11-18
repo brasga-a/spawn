@@ -45,6 +45,11 @@ RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps
 run cargo clippy -p spawn-platform --features wayland --all-targets -- -D warnings
 run cargo test -p spawn-platform --features wayland
 RUSTDOCFLAGS="-D warnings" run cargo doc -p spawn-platform --features wayland --no-deps
+run cargo clippy -p spawn-render --features vulkan --all-targets -- -D warnings
+run cargo test -p spawn-render --features vulkan
+RUSTDOCFLAGS="-D warnings" run cargo doc -p spawn-render --features vulkan --no-deps
+# GPU tests (real device through VK_EXT_headless_surface) need hardware and are
+# opt-in: cargo test -p spawn-render --features vulkan -- --ignored
 run cargo deny check
 
 echo "All mandatory checks ran and passed."

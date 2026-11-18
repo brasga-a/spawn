@@ -42,7 +42,7 @@ Dependencies point **down only**, are explicit, and acyclic.
 
 - **Engine infrastructure** (`crates/spawn-*`): no genre concepts (`Weapon`, `Health`, `Team`, `Vehicle`…). Never depends on frameworks, games, or tools.
 - **Gameplay frameworks**: independent, genre-specific, depend on infrastructure only; one framework must not depend on another without explicit agreement. Intended home: `frameworks/` (`SCAFFOLD`: empty directory, not a workspace member). Only the FPS framework is in scope; do not build others.
-- **Game projects / examples**: `examples/` (`SCAFFOLD`: empty). Root package `spawn-engine` (`src/main.rs`) is a placeholder sandbox binary.
+- **Game projects / examples**: `examples/` holds only `vulkan_clear.rs`, a Cargo example target of the root package (manual Phase 3 smoke test); example packages per the *proposed* [ADR-0022](docs/adr/0022-repository-layout.md) do not exist, and if that ADR is accepted this file moves into one. Root package `spawn-engine` (`src/main.rs`) is a placeholder sandbox binary.
 - **Tools** (`tools/*`): development tooling. Engine crates must never depend on tools. Tools depend on engine crates.
 - Subsystems are optional: a game must not be forced to link or initialize systems it does not use.
 
@@ -63,7 +63,7 @@ Integration layer: `mlua` with the `luau` feature (`PLANNED`; not a dependency).
 
 ## Workspace
 
-Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version`, `edition` (2024), `license` (MIT) and `rust-version` (1.99.1), inherited by every member; `[workspace.lints]` (ADR-0007) is inherited by every member through `[lints] workspace = true`; dev profile uses `opt-level = 1` (dependencies `opt-level = 3`). `[workspace.dependencies]` pins `raw-window-handle`, `rustix`, `wayland-client` and `wayland-protocols`, used only by `spawn-platform` behind its optional `wayland` feature; with default features **every package has zero dependencies**. No inter-crate (`spawn-*` → `spawn-*`) dependency edge exists; all such edges in nested documents are `PLANNED`.
+Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version`, `edition` (2024), `license` (MIT) and `rust-version` (1.99.1), inherited by every member; `[workspace.lints]` (ADR-0007) is inherited by every member through `[lints] workspace = true`; dev profile uses `opt-level = 1` (dependencies `opt-level = 3`). `[workspace.dependencies]` pins `ash` (used by `spawn-render` behind its optional `vulkan` feature), `raw-window-handle` (both crates' optional backend features), and `rustix`, `wayland-client`, `wayland-protocols` (`spawn-platform`'s optional `wayland` feature); with default features **every package has zero normal dependencies**. The only inter-crate edges are Linux **dev-dependencies** of the root package on `spawn-platform` (`wayland`) and `spawn-render` (`vulkan`) for the `vulkan_clear` smoke example; no library depends on another `spawn-*` crate, and all such edges in nested documents are `PLANNED`.
 
 Conventions:
 - One crate per subsystem with a narrow public API; names `spawn-<subsystem>`.
@@ -89,7 +89,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-reflect](crates/spawn-reflect/AGENTS.md) | Runtime type metadata for serialization, editor, script exposure | SCAFFOLD |
 | [spawn-platform](crates/spawn-platform/AGENTS.md) | OS integration: windows, system events, surfaces | EXISTS (raw events; Wayland backend); X11, Win32 PLANNED |
 | [spawn-input](crates/spawn-input/AGENTS.md) | Input devices, state, actions, mappings | SCAFFOLD |
-| [spawn-render](crates/spawn-render/AGENTS.md) | GPU abstraction, resources, shaders, materials, frame execution | SCAFFOLD |
+| [spawn-render](crates/spawn-render/AGENTS.md) | GPU abstraction, resources, shaders, materials, frame execution | EXISTS (Vulkan clear frame, Wayland surfaces); rest PLANNED |
 | [spawn-physics](crates/spawn-physics/AGENTS.md) | Rigid-body simulation, collision, spatial queries | SCAFFOLD |
 | [spawn-animation](crates/spawn-animation/AGENTS.md) | Skeletal/property animation runtime, blending, state machines | SCAFFOLD |
 | [spawn-audio](crates/spawn-audio/AGENTS.md) | Audio playback, mixing, spatialization | SCAFFOLD |
@@ -102,7 +102,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-editor](tools/spawn-editor/AGENTS.md) | Graphical authoring tools | SCAFFOLD |
 | [spawn-mcp](tools/spawn-mcp/AGENTS.md) | MCP server for external AI agents/tools | SCAFFOLD |
 
-Verified state: `spawn-core` contains the fixed-step clock (`FixedStepClock`, `FixedStepConfig`, `FixedStepUpdate`, `Tick`, `ClockError`) with unit, verification (FND-T01, FND-T02) and doc tests; `spawn-platform` contains the raw event types, `WindowDescriptor` and `PlatformError` (always compiled) and, behind the `wayland` feature, the Wayland backend (`Platform`, `Window`, `PumpMode`) with headless translation tests (FND-T05, FND-T10 platform part) and a manual smoke example; every other `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
+Verified state: `spawn-core` contains the fixed-step clock (`FixedStepClock`, `FixedStepConfig`, `FixedStepUpdate`, `Tick`, `ClockError`) with unit, verification (FND-T01, FND-T02) and doc tests; `spawn-platform` contains the raw event types, `WindowDescriptor` and `PlatformError` (always compiled) and, behind the `wayland` feature, the Wayland backend (`Platform`, `Window`, `PumpMode`) with headless translation tests (FND-T05, FND-T10 platform part) and a manual smoke example; `spawn-render` contains its public types, `RenderError`, the pure presentation controller and selection logic (always compiled, FND-T06/T07 tests) and, behind the `vulkan` feature, `Renderer` over a private Vulkan 1.3 RHI with opt-in GPU tests; every other `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
 
 Ownership rule: each piece of state has exactly one owning system; others use its API. If a responsibility seems to fit two crates, stop and report rather than duplicate it.
 

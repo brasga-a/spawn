@@ -8,4 +8,14 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# No backend by default: presentation policy and selection logic compile and
+# test without a GPU or Vulkan loader.
+default = []
+# Vulkan backend (ADR-0004). The Vulkan loader is loaded at runtime, so building
+# needs no system libraries and a missing loader is a startup error.
+vulkan = ["dep:ash", "dep:raw-window-handle"]
+
 [dependencies]
+ash = { workspace = true, optional = true, features = ["loaded", "std"] }
+raw-window-handle = { workspace = true, optional = true }

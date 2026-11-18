@@ -1,7 +1,7 @@
 # Foundation Milestone — First Running Frame
 
 **Milestone:** Spawn Foundation / first native runtime slice  
-**Status:** in progress: phase 1 (clock) implemented and validated; phase 2 (platform, Wayland backend) implemented, validation pending (manual compositor-close test); 2b (relative pointer motion, cursor lock) and phases 3–6 PLANNED ([plan](PLAN.md))  
+**Status:** in progress: phase 1 (clock) implemented and validated; phase 2 (platform, Wayland backend) implemented, validation pending (manual compositor-close test); phase 3 (Vulkan clear frame) implemented, validation pending (validation-layer run, manual drag resize and hide/minimize); 2b (relative pointer motion, cursor lock) and phases 4–6 PLANNED ([plan](PLAN.md)). The milestone is not complete  
 **Target:** A small generic executable that creates a window, polls events, updates a bounded fixed-step simulation clock, presents a clear frame, handles input and resize, and exits cleanly.
 
 The first demonstrated frame can be a solid clear color; triangle, mesh, camera, gameplay, and editor UI are subsequent work.
