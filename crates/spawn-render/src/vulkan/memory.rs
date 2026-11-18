@@ -415,6 +415,77 @@ impl VulkanMemoryAllocator {
         Ok(slice.to_vec())
     }
 
+    /// Writes `bytes` at `dst_offset` inside a freshly suballocated `HOST_VISIBLE | HOST_COHERENT`
+    /// staging slice before the staging copy command buffer is submitted.
+    #[track_caller]
+    pub(crate) fn write_host_bytes(
+        &mut self,
+        sub: &Suballocation,
+        dst_offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RenderError> {
+        if sub.domain != MemoryDomain::HostVisible {
+            return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("cannot write host bytes to a non-HOST_VISIBLE suballocation"));
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let len_u64 = u64::try_from(bytes.len()).map_err(|_| {
+            RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("staging write byte length overflows u64")
+        })?;
+        let slice_end = dst_offset.checked_add(len_u64).ok_or_else(|| {
+            RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("staging dst_offset + length overflow")
+        })?;
+        if slice_end > sub.size {
+            return Err(
+                RenderError::new(RenderErrorKind::InvalidResourceDescriptor).with_detail(format!(
+                    "staging write range {dst_offset}..{slice_end} exceeds suballocation size {} B",
+                    sub.size
+                )),
+            );
+        }
+        let backing = self.blocks.get(&sub.block_id).ok_or_else(|| {
+            RenderError::new(RenderErrorKind::VulkanCallFailed)
+                .with_detail(format!("missing mapped backing block {}", sub.block_id.0))
+        })?;
+        let block_offset = sub.offset.checked_add(dst_offset).ok_or_else(|| {
+            RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("staging block offset overflow")
+        })?;
+        let block_end = block_offset.checked_add(len_u64).ok_or_else(|| {
+            RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("staging block end overflow")
+        })?;
+        if block_end > backing.size {
+            return Err(RenderError::new(RenderErrorKind::VulkanCallFailed)
+                .with_detail("staging write range exceeds backing block size"));
+        }
+        let base_ptr = backing.mapped.ok_or_else(|| {
+            RenderError::new(RenderErrorKind::VulkanCallFailed)
+                .with_detail("HOST_VISIBLE backing block is missing persistent mapping")
+        })?;
+        let block_offset_usize = usize::try_from(block_offset).map_err(|_| {
+            RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+                .with_detail("staging block offset overflows usize")
+        })?;
+
+        // SAFETY: `base_ptr` points to a persistently mapped `HOST_VISIBLE | HOST_COHERENT`
+        // region of `backing.size` bytes, `[block_offset_usize .. block_offset_usize + bytes.len())`
+        // lies strictly within an exclusive live suballocation not yet submitted to the GPU, and
+        // `bytes` is an independent Rust slice so regions never overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                base_ptr.as_ptr().add(block_offset_usize),
+                bytes.len(),
+            );
+        }
+        Ok(())
+    }
+
     #[track_caller]
     pub(crate) fn free_now(
         &mut self,

@@ -380,17 +380,16 @@ fn drain_and_assert_zero_validation_errors(renderer: &mut Renderer<'_>) {
 fn f3d_t11_offscreen_triangle_readback_culling_swapchain_resize_and_leak_free_shutdown() {
     let descriptor = RendererDescriptor {
         present_mode: PresentModePreference::Fifo,
-        validation: Validation::IfAvailable,
+        validation: Validation::Required,
     };
-    let mut renderer = Renderer::new_headless(SurfaceSize::new(320, 240), &descriptor)
-        .expect("headless Vulkan 1.3 renderer initialization must succeed on reference GPU");
+    let mut renderer = Renderer::new_headless(SurfaceSize::new(320, 240), &descriptor).expect(
+        "headless Vulkan 1.3 renderer initialization with validation must succeed on reference GPU",
+    );
     eprintln!("F3D-T11 renderer: {:?}", renderer.info());
-    if std::env::var_os("VK_INSTANCE_LAYERS").is_some() {
-        assert!(
-            renderer.info().validation_enabled,
-            "Khronos validation layer was requested via VK_INSTANCE_LAYERS but is not active"
-        );
-    }
+    assert!(
+        renderer.info().validation_enabled,
+        "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
+    );
 
     let vs_ccw_bytes = encode_triangle_vs(false, 0.5).unwrap();
     let vs_cw_bytes = encode_triangle_vs(true, 0.5).unwrap();
@@ -677,7 +676,8 @@ fn f3d_t11_offscreen_triangle_readback_culling_swapchain_resize_and_leak_free_sh
     assert_eq!(closed_stats.retired_allocations, 0);
 
     // 6. Also verify GPU budget exhaustion (`REND-0012`) unwinds cleanly on a second
-    //    renderer with a tight `DEVICE_LOCAL` budget, leaving zero validation errors on drop!
+    //    renderer with a tight `DEVICE_LOCAL` budget, leaving zero leaked allocations and
+    //    zero validation errors on both `close()` and implicit `Drop`!
     {
         let tight_budget = GpuMemoryBudget {
             device_local_bytes: 512 * 1024, // 512 KiB
@@ -688,13 +688,35 @@ fn f3d_t11_offscreen_triangle_readback_culling_swapchain_resize_and_leak_free_sh
         let mut tight_renderer =
             Renderer::new_headless_with_budget(SurfaceSize::new(0, 0), &descriptor, tight_budget)
                 .unwrap();
+        assert!(tight_renderer.info().validation_enabled);
         // A 512x512 RGBA8 + D32_SFLOAT offscreen target needs >= 2 MiB > 512 KiB -> REND-0012!
         let oom_err = tight_renderer
             .create_offscreen_target(SurfaceSize::new(512, 512))
             .unwrap_err();
         assert_eq!(oom_err.kind(), RenderErrorKind::GpuMemoryExhausted);
         assert_eq!(oom_err.code(), "REND-0012");
+        let mid_stats = tight_renderer.allocator_stats();
+        assert_eq!(mid_stats.live_allocations, 0);
+        assert_eq!(mid_stats.live_allocated_bytes, 0);
+        assert_eq!(mid_stats.retired_allocations, 0);
         drain_and_assert_zero_validation_errors(&mut tight_renderer);
-        // Implicit `Drop` on `tight_renderer` exercises the automatic RAII teardown path too.
+        let oom_closed = tight_renderer.close().unwrap();
+        assert_eq!(oom_closed.block_count, 0);
+        assert_eq!(oom_closed.live_allocations, 0);
+        assert_eq!(oom_closed.retired_allocations, 0);
+
+        // Implicit `Drop` on a renderer after OOM exercises the automatic RAII teardown path too.
+        let mut drop_renderer =
+            Renderer::new_headless_with_budget(SurfaceSize::new(0, 0), &descriptor, tight_budget)
+                .unwrap();
+        assert!(drop_renderer.info().validation_enabled);
+        assert_eq!(
+            drop_renderer
+                .create_offscreen_target(SurfaceSize::new(512, 512))
+                .unwrap_err()
+                .kind(),
+            RenderErrorKind::GpuMemoryExhausted
+        );
+        drain_and_assert_zero_validation_errors(&mut drop_renderer);
     }
 }

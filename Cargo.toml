@@ -13,6 +13,7 @@ rust-version = "1.99.1"
 [workspace.dependencies]
 arbitrary = { version = "1.5.0", default-features = false }
 ash = { version = "0.38.0", default-features = false }
+bytemuck = { version = "1.25.2", default-features = false }
 clap = { version = "4.6.8", default-features = false }
 glam = { version = "0.34.3", default-features = false }
 insta = { version = "1.49.0", default-features = false }

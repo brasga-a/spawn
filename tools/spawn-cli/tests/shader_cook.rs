@@ -1254,24 +1254,44 @@ fn f3d_t13_shader_toolchain_headless_tree_build_rs_and_uncommitted_spv_audit() {
     // 1. `cargo tree -p spawn-cli -e normal` pulls zero window/GPU backends or unapproved crates.
     let tree_out = Command::new(env!("CARGO"))
         .current_dir(&root)
-        .args(["tree", "-p", "spawn-cli", "-e", "normal"])
+        .env("CARGO_TERM_COLOR", "never")
+        .args([
+            "tree",
+            "--color",
+            "never",
+            "-p",
+            "spawn-cli",
+            "-e",
+            "normal",
+        ])
         .output()
         .unwrap();
     assert!(tree_out.status.success());
     let tree = String::from_utf8(tree_out.stdout).unwrap();
+    assert!(
+        !tree.contains('\x1b'),
+        "cargo tree emitted unexpected ANSI escape sequences:\n{tree}"
+    );
     let crate_names: std::collections::BTreeSet<String> = tree
         .lines()
         .filter_map(|line| {
-            let trimmed = line.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+            let trimmed =
+                line.trim_start_matches([' ', '│', '├', '└', '─', '┬', '|', '+', '`', '\\', '-']);
+            if trimmed.is_empty() || trimmed.starts_with('[') {
+                return None;
+            }
             trimmed.split_whitespace().next().map(str::to_owned)
         })
         .collect();
     for forbidden in [
         "ash",
+        "bytemuck",
         "wayland-client",
         "wayland-protocols",
         "raw-window-handle",
         "rustix",
+        "windows-sys",
+        "x11rb",
         "spawn-platform",
         "spawn-input",
         "serde_json",
@@ -1340,7 +1360,7 @@ fn f3d_t13_shader_toolchain_headless_tree_build_rs_and_uncommitted_spv_audit() {
                 break;
             }
             if code.starts_with("pub ") && !code.starts_with("pub mod ") {
-                for leaked in ["clap::", "rspirv::", "ash::", "vk::"] {
+                for leaked in ["clap::", "rspirv::", "ash::", "vk::", "bytemuck::"] {
                     assert!(
                         !code.contains(leaked),
                         "{}:{} leaks third-party type `{leaked}` in public item: `{code}`",

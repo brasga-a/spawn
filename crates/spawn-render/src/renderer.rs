@@ -8,7 +8,8 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::allocator::{GpuAllocatorStats, GpuMemoryBudget};
 use crate::error::{RenderError, RenderErrorKind};
-use crate::handle::{OffscreenTargetHandle, PipelineHandle, ShaderHandle};
+use crate::handle::{MeshHandle, OffscreenTargetHandle, PipelineHandle, ShaderHandle};
+use crate::mesh::{CameraRelativeView, MeshDescriptor, MeshDraw};
 use crate::types::{
     ClearColor, FrameOutcome, GraphicsPipelineDescriptor, OffscreenReadback, PresentationState,
     RendererDescriptor, RendererInfo, SurfaceSize, ValidationMessage,
@@ -24,8 +25,9 @@ use crate::vulkan::{SurfaceSource, VulkanRenderer};
 ///
 /// Rendering is driven explicitly by the caller (ADR-0003): it reports the
 /// drawable size with [`Renderer::resize`] and calls
-/// [`Renderer::render_clear`] or [`Renderer::render_triangle`] once per
-/// presented frame. The renderer never touches simulation state or time.
+/// [`Renderer::render_clear`], [`Renderer::render_triangle`], or
+/// [`Renderer::render_meshes`] once per presented frame. The renderer never
+/// touches simulation state or time.
 ///
 /// **Thread affinity:** not `Send`/`Sync`; use it on the thread that created
 /// it.
@@ -177,6 +179,27 @@ impl<'window> Renderer<'window> {
         self.backend.destroy_offscreen_target(handle)
     }
 
+    /// Validates `descriptor` (`REND-0014` on empty/oversized slices, non-finite
+    /// vertex attributes, or out-of-bounds triangle indices; `SPN-INV-034`),
+    /// stages vertices and `u32` indices into `DEVICE_LOCAL` buffers via
+    /// `vkCmdCopyBuffer2` + `synchronization2`, retires the staging buffer on
+    /// the timeline semaphore, and returns a generational [`MeshHandle`].
+    #[track_caller]
+    pub fn upload_mesh(
+        &mut self,
+        descriptor: &MeshDescriptor<'_>,
+    ) -> Result<MeshHandle, RenderError> {
+        self.backend.upload_mesh(descriptor)
+    }
+
+    /// Releases an uploaded 3D mesh (`REND-0013` on stale or forged handles),
+    /// retiring its `DEVICE_LOCAL` vertex and index suballocations on the
+    /// timeline semaphore.
+    #[track_caller]
+    pub fn destroy_mesh(&mut self, handle: MeshHandle) -> Result<(), RenderError> {
+        self.backend.destroy_mesh(handle)
+    }
+
     /// Clears the next swapchain image to `color` (and its `D32_SFLOAT` depth
     /// attachment to `0.0`) and queues it for presentation.
     ///
@@ -216,6 +239,22 @@ impl<'window> Renderer<'window> {
             .render_triangle(pipeline, clear_color, vertex_count)
     }
 
+    /// Clears the next swapchain image to `clear_color` and its `D32_SFLOAT`
+    /// reversed-Z depth attachment to `0.0`, draws `draws` as camera-relative
+    /// indexed 3D meshes (`SPN-INV-052`) with `pipeline`, and queues the image
+    /// for presentation.
+    #[track_caller]
+    pub fn render_meshes(
+        &mut self,
+        pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<FrameOutcome, RenderError> {
+        self.backend
+            .render_meshes(pipeline, clear_color, view, draws)
+    }
+
     /// Clears `target` (`R8G8B8A8_UNORM` + `D32_SFLOAT` depth `0.0`), draws
     /// `vertex_count` unindexed vertices with `pipeline`, and copies the
     /// resulting linear RGBA8 image back to host memory.
@@ -229,6 +268,23 @@ impl<'window> Renderer<'window> {
     ) -> Result<OffscreenReadback, RenderError> {
         self.backend
             .render_offscreen_triangle(target, pipeline, clear_color, vertex_count)
+    }
+
+    /// Clears `target` (`R8G8B8A8_UNORM` + `D32_SFLOAT` reversed-Z depth `0.0`),
+    /// draws `draws` as camera-relative indexed 3D meshes (`SPN-INV-052`) with
+    /// `pipeline`, and copies the resulting linear RGBA8 image back to host
+    /// memory.
+    #[track_caller]
+    pub fn render_offscreen_meshes(
+        &mut self,
+        target: OffscreenTargetHandle,
+        pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<OffscreenReadback, RenderError> {
+        self.backend
+            .render_offscreen_meshes(target, pipeline, clear_color, view, draws)
     }
 
     /// Current presentation state.

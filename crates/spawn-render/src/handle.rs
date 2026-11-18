@@ -97,6 +97,12 @@ define_render_handle!(
     "OffscreenTargetHandle"
 );
 
+define_render_handle!(
+    /// Generational handle referencing an uploaded indexed 3D mesh (`DEVICE_LOCAL` vertex + index buffers).
+    MeshHandle,
+    "MeshHandle"
+);
+
 pub(crate) trait HandleType: Copy {
     const KIND: &'static str;
     fn from_raw_pool(raw: RawHandle) -> Self;
@@ -133,6 +139,16 @@ impl HandleType for OffscreenTargetHandle {
     }
 }
 
+impl HandleType for MeshHandle {
+    const KIND: &'static str = Self::KIND_LABEL;
+    fn from_raw_pool(raw: RawHandle) -> Self {
+        Self::from_pool(raw)
+    }
+    fn into_raw_pool(self) -> RawHandle {
+        self.raw()
+    }
+}
+
 #[derive(Debug)]
 struct Slot<T> {
     generation: u32,
@@ -147,6 +163,8 @@ pub(crate) struct GenerationalPool<H, T> {
     slots: Vec<Slot<T>>,
     free_indices: Vec<u32>,
     live_count: usize,
+    #[cfg(test)]
+    fail_next_insert: bool,
     _marker: PhantomData<fn() -> H>,
 }
 
@@ -159,8 +177,17 @@ impl<H: HandleType, T> GenerationalPool<H, T> {
             slots: Vec::new(),
             free_indices: Vec::new(),
             live_count: 0,
+            #[cfg(test)]
+            fail_next_insert: false,
             _marker: PhantomData,
         }
+    }
+
+    /// Injects a capacity-exhaustion failure on the next `insert` / `try_insert`
+    /// call (used to verify GPU resource rollback on pool insertion errors).
+    #[cfg(test)]
+    pub(crate) fn inject_insert_failure(&mut self) {
+        self.fail_next_insert = true;
     }
 
     /// Number of currently live resources in the pool.
@@ -175,20 +202,41 @@ impl<H: HandleType, T> GenerationalPool<H, T> {
         self.live_count == 0
     }
 
-    /// Inserts `value` and returns its unique generational handle.
+    /// Inserts `value` and returns its unique generational handle, returning
+    /// ownership of `value` alongside the error if insertion fails so GPU
+    /// resources can be explicitly rolled back.
     #[track_caller]
-    pub(crate) fn insert(&mut self, value: T) -> Result<H, RenderError> {
-        if let Some(index) = self.free_indices.pop() {
-            let idx = usize::try_from(index).map_err(|_| {
-                RenderError::new(RenderErrorKind::InvalidResourceHandle).with_detail(format!(
-                    "{} free slot index {index} overflows usize",
+    pub(crate) fn try_insert(&mut self, value: T) -> Result<H, (T, RenderError)> {
+        #[cfg(test)]
+        if self.fail_next_insert {
+            self.fail_next_insert = false;
+            return Err((
+                value,
+                RenderError::new(RenderErrorKind::GpuMemoryExhausted).with_detail(format!(
+                    "{} pool capacity exhausted (injected failure)",
                     H::KIND
-                ))
-            })?;
-            let slot = self.slots.get_mut(idx).ok_or_else(|| {
-                RenderError::new(RenderErrorKind::InvalidResourceHandle)
-                    .with_detail(format!("{} free slot {index} out of bounds", H::KIND))
-            })?;
+                )),
+            ));
+        }
+
+        if let Some(index) = self.free_indices.pop() {
+            let Ok(idx) = usize::try_from(index) else {
+                self.free_indices.push(index);
+                return Err((
+                    value,
+                    RenderError::new(RenderErrorKind::InvalidResourceHandle).with_detail(format!(
+                        "{} free slot index {index} overflows usize",
+                        H::KIND
+                    )),
+                ));
+            };
+            let Some(slot) = self.slots.get_mut(idx) else {
+                return Err((
+                    value,
+                    RenderError::new(RenderErrorKind::InvalidResourceHandle)
+                        .with_detail(format!("{} free slot {index} out of bounds", H::KIND)),
+                ));
+            };
             slot.value = Some(value);
             self.live_count = self.live_count.saturating_add(1);
             return Ok(H::from_raw_pool(RawHandle {
@@ -198,12 +246,15 @@ impl<H: HandleType, T> GenerationalPool<H, T> {
             }));
         }
 
-        let index = u32::try_from(self.slots.len()).map_err(|_| {
-            RenderError::new(RenderErrorKind::GpuMemoryExhausted).with_detail(format!(
-                "{} pool capacity exhausted (u32::MAX slots)",
-                H::KIND
-            ))
-        })?;
+        let Ok(index) = u32::try_from(self.slots.len()) else {
+            return Err((
+                value,
+                RenderError::new(RenderErrorKind::GpuMemoryExhausted).with_detail(format!(
+                    "{} pool capacity exhausted (u32::MAX slots)",
+                    H::KIND
+                )),
+            ));
+        };
         let generation = 1;
         self.slots.push(Slot {
             generation,
@@ -215,6 +266,12 @@ impl<H: HandleType, T> GenerationalPool<H, T> {
             generation,
             owner: self.owner,
         }))
+    }
+
+    /// Inserts `value` and returns its unique generational handle.
+    #[track_caller]
+    pub(crate) fn insert(&mut self, value: T) -> Result<H, RenderError> {
+        self.try_insert(value).map_err(|(_, err)| err)
     }
 
     /// Borrows the live resource referenced by `handle`, or returns `REND-0013`.
@@ -400,5 +457,24 @@ error[REND-0013]: invalid or stale render resource handle
    = detail: ShaderHandle(index=0, generation=1): stale generation
 "#
         );
+    }
+
+    #[test]
+    fn try_insert_returns_value_on_injected_failure_without_corrupting_pool() {
+        let mut pool: GenerationalPool<MeshHandle, String> = GenerationalPool::new();
+        let existing = pool.insert("resident_mesh".to_owned()).unwrap();
+
+        pool.inject_insert_failure();
+        let (returned, err) = pool.try_insert("rollback_mesh".to_owned()).unwrap_err();
+        assert_eq!(returned, "rollback_mesh");
+        assert_eq!(err.kind(), RenderErrorKind::GpuMemoryExhausted);
+        assert_eq!(err.code(), "REND-0012");
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.get(existing).unwrap(), "resident_mesh");
+
+        // Subsequent inserts succeed normally.
+        let next = pool.insert("recovered_mesh".to_owned()).unwrap();
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.get(next).unwrap(), "recovered_mesh");
     }
 }
