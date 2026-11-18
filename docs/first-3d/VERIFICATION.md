@@ -1,6 +1,6 @@
 # Verification and Acceptance — First 3D and Free Camera
 
-**Status:** Milestone 2 Phases 1–5 implementation and automated tests (`F3D-T01..T10`, `F3D-T13`), opt-in GPU tests (`F3D-T11`, `F3D-T12`), and non-interactive reference-hardware smoke runs `EXISTS` on this branch (`SPN-INV-100`). **Phase 6 / Gate G3 Milestone Exit is `IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`** (not closed; see [Exit gate](#exit-gate) for the two open items awaiting owner execution/decision). All Foundation verification cases (`FND-T01..T10` in [foundation/VERIFICATION.md](../foundation/VERIFICATION.md)) remain green.
+**Status:** Milestone 2 Phases 1–5 implementation and automated tests (`F3D-T01..T10`, `F3D-T13`), opt-in GPU tests (`F3D-T11`, `F3D-T12`), and non-interactive reference-hardware smoke runs `EXISTS` on this branch (`SPN-INV-100`). **Phase 6 / Gate G3 Milestone Exit is `SIGNED OFF BY OWNER (2026-11-18)`** (closed for Linux/Wayland + Vulkan 1.3 on the reference hardware; see [Exit gate](#exit-gate)). All Foundation verification cases (`FND-T01..T10` in [foundation/VERIFICATION.md](../foundation/VERIFICATION.md)) remain green.
 
 ## Required automated checks
 
@@ -149,9 +149,9 @@ Milestone 2 satisfies [Gate G3](../architecture/GATES.md#g3--milestone-exit) **o
 6. Affected `AGENTS.md` status tags (`spawn-math`, `spawn-cli`, `spawn-render`, root `AGENTS.md`) and `DEPENDENCIES.md` (`In use` column) match the verified implementation (`SPN-INV-100`).
 7. Unsupported platforms (Windows, X11), untested GPUs/compositors, and any unexercised recovery edges are listed explicitly.
 
-Exit gate status: **`IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`** (Gate G3 is **not** closed, and no Gate G2/G3 requirement is waived without explicit owner approval).
+Exit gate status: **`SIGNED OFF BY OWNER (2026-11-18)`**. Gate G3 is closed for Linux/Wayland + Vulkan 1.3 on the reference hardware, and no Gate G2/G3 requirement was waived.
 
-- **Verified on branch (Phases 0–5 automated + non-interactive reference-hardware evidence):**
+- **Verified (Phases 0–6: automated, GPU, fuzzing, interactive, and performance evidence):**
   - Item 1 (`slangc` `2026.22` pinned and installed; `ADR-0014` and Slang license accepted): **Verified**.
   - Item 2 (`./scripts/check.sh` including `FND-T01..T10`, `F3D-T01..T10`, `F3D-T13`, rustdoc `-D warnings`, and `cargo deny check` without `slangc`, display, or GPU): **Verified**.
   - Item 3 (coverage-guided `cargo fuzz run --sanitizer address decode_cooked_shader`, Gate G2): **Verified** in the CI job `fuzz` on PR #15 ([run](https://github.com/brasga-a/spawn/actions/runs/44367360413/job/135024603769)): `300 s`, `34,658,770` executions (~`115k exec/s`), coverage `cov: 328 → 630`, `ft: 355 → 1235`, corpus `5 → 155` units (`228` new), peak RSS `508 MB`, `0` crashes/leaks/OOM, plus `cargo deny` clean for the fuzz package (owner-approved [ADR-0007](../adr/0007-toolchain-lints-and-ci.md) nightly exception limited to that job). The earlier uninstrumented stable run (corpus `1/1b`) is not counted.
@@ -160,6 +160,5 @@ Exit gate status: **`IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF`** (G
   - Performance ([Gate G3](../architecture/GATES.md#g3--milestone-exit) "performance measured against the milestone's budgets"): **Verified**. The owner approved the Milestone 2 budget on 2026-11-18, and every budgeted metric passes on the reference hardware. Frame pacing passes with the documented Mesa workaround ([Performance budget and measurements](#performance-budget-and-measurements-reference-hardware)).
   - Item 6 (`AGENTS.md`, `DEPENDENCIES.md`, and `docs/first-3d/*` synchronized with branch status): **Verified**.
   - Item 7 (unsupported platforms `Windows`/`X11` and untested compositors/GPUs/recovery edges listed explicitly): **Verified**.
-- **Open items awaiting owner execution or explicit sign-off before Gate G3 can pass:**
-  1. **Owner final sign-off** of this exit gate, then merge of the stacked pull requests #5 → #15 into `master`.
+- **Owner sign-off:** 2026-11-18, after review of the evidence above; the stacked pull requests #5 → #15 merge into `master` in order.
 - **Known limitations and unverified boundaries:** X11 (`PLAT-0001`/`REND-0002`) and Windows (`ENGN-0002`) native backends are `PLANNED`; live-window `0x0`/minimize occlusion on Hyprland, DPI scale > 1, physical GPU device loss, other compositors, and other GPUs have not been exercised interactively on hardware (camera movement, focus-loss reset, `Escape`, `0x0` suspension, and resize recovery are covered headlessly in `F3D-T05`, `F3D-T10`, `F3D-T12`, `FND-T03`, `FND-T04`, `FND-T06`, `FND-T10`, and `FND-INV-06`).

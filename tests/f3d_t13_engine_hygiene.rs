@@ -217,17 +217,22 @@ fn f3d_t13_spawn_engine_boundaries_safety_genre_neutrality_and_doc_sync()
     ] {
         let doc = fs::read_to_string(root.join(milestone_doc))?;
         assert!(
-            doc.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
-            "{milestone_doc} must keep Phase 6 / Gate G3 open pending owner verification & sign-off"
+            doc.contains("SIGNED OFF BY OWNER (2026-11-18)"),
+            "{milestone_doc} must record the owner's Gate G3 sign-off"
+        );
+        assert!(
+            !doc.contains("IN PROGRESS — PENDING OWNER"),
+            "{milestone_doc} must not keep a stale pending Gate G3 status"
         );
         assert!(
             !doc.contains("satisfied for Linux/Wayland") && !doc.contains("Gate G3 satisfied"),
-            "{milestone_doc} must not prematurely declare Gate G3 satisfied"
+            "{milestone_doc} must use the owner sign-off wording, not a self-declared `satisfied` status"
         );
     }
     assert!(
-        root_agents.contains("IN PROGRESS — PENDING OWNER VERIFICATION & SIGN-OFF"),
-        "root AGENTS.md must record Phase 6 / Gate G3 as pending owner verification & sign-off"
+        root_agents.contains("SIGNED OFF BY OWNER (2026-11-18)")
+            && !root_agents.contains("IN PROGRESS — PENDING OWNER"),
+        "root AGENTS.md must record the owner's Phase 6 / Gate G3 sign-off"
     );
 
     Ok(())
