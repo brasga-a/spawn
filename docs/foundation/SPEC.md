@@ -1,6 +1,6 @@
 # Specification — First Native Runtime Slice
 
-**Status:** PLANNED. This is a contract for future implementation, not evidence of existing capabilities.  
+**Status:** `EXISTS` on Linux/Wayland + Vulkan 1.3 (X11 and Windows backends remain `PLANNED`; see [VERIFICATION.md](VERIFICATION.md) for automated test and smoke-run evidence).  
 **Audience:** contributors implementing `spawn-core`, `spawn-platform`, `spawn-input`, `spawn-render`, and the root `spawn-engine` executable.
 
 ## Goal

@@ -9,5 +9,5 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-spawn-core = { path = "../spawn-core", default-features = false }
-spawn-platform = { path = "../spawn-platform", default-features = false }
+spawn-core = { version = "0.1.0", path = "../spawn-core", default-features = false }
+spawn-platform = { version = "0.1.0", path = "../spawn-platform", default-features = false }

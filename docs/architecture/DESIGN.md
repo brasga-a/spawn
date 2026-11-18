@@ -1,6 +1,6 @@
 # Engine Technical Design
 
-How Spawn's subsystems fit together, derived from the [ADRs](../adr/README.md). **Most of the architecture described here is `PLANNED`**: only the foundation slices of `spawn-core`, `spawn-platform`, `spawn-input`, and `spawn-render` exist (`EXISTS`; see the root [Subsystem Responsibility Map](../../AGENTS.md#subsystem-responsibility-map) for exact scope, while the root composition loop and all other crates remain `SCAFFOLD` or `PLANNED`). Rationale lives in the ADRs; global rules in the root [AGENTS.md](../../AGENTS.md); non-negotiable rules in [INVARIANTS](INVARIANTS.md). Parts based on *Proposed* ADRs are marked *proposed*.
+How Spawn's subsystems fit together, derived from the [ADRs](../adr/README.md). **Most of the architecture described here is `PLANNED`**: only the foundation slices of `spawn-core`, `spawn-platform`, `spawn-input`, `spawn-render`, and the single-threaded root `spawn-engine` composition loop exist (`EXISTS`; see the root [Subsystem Responsibility Map](../../AGENTS.md#subsystem-responsibility-map) for exact scope, while all other crates remain `SCAFFOLD` or `PLANNED`). Rationale lives in the ADRs; global rules in the root [AGENTS.md](../../AGENTS.md); non-negotiable rules in [INVARIANTS](INVARIANTS.md). Parts based on *Proposed* ADRs are marked *proposed*.
 
 ## 1. Layers
 
@@ -22,7 +22,7 @@ How Spawn's subsystems fit together, derived from the [ADRs](../adr/README.md). 
 
 ## 2. Crate dependency plan
 
-Only `spawn-input -> spawn-core, spawn-platform` (without backend features) exists among library crates so far (plus Linux dev-dependencies on the root package for the `vulkan_clear` smoke example). The intended edges below follow the ADRs and [INVARIANTS](INVARIANTS.md); each is added only when code needs it.
+Only `spawn-input -> spawn-core, spawn-platform` (without backend features) and root `spawn-engine -> spawn-core, spawn-input, spawn-platform, spawn-render` (`wayland` + `vulkan` enabled on Linux) exist so far. The intended edges below follow the ADRs and [INVARIANTS](INVARIANTS.md); each is added only when code needs it.
 
 | Level | Crate | Intended `spawn-*` dependencies |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ Only `spawn-input -> spawn-core, spawn-platform` (without backend features) exis
 
 ### 3.1 Main loop (ADR-0003)
 
-The root binary owns a poll-driven loop. The timing part exists in `spawn-core` (`FixedStepClock`); the loop itself is `PLANNED`:
+The root binary owns a poll-driven loop. The single-threaded foundation loop exists in `spawn-engine` (`run_session` over `FixedStepClock`, `spawn-platform`, `spawn-input` and `spawn-render`); ECS system execution and multi-threaded stages remain `PLANNED`:
 
 ```text
 loop {

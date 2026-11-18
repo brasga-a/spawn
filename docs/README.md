@@ -1,6 +1,6 @@
 # Spawn Engineering Documentation
 
-> Status: **design baseline / not implemented**. This directory describes the first engineering milestone, not an already working engine. The repository's root [AGENTS.md](../AGENTS.md) and crate-level AGENTS.md files remain the authoritative ownership and agent-behavior rules.
+> Status: **foundation slice `EXISTS` on Linux/Wayland; wider engine architecture `PLANNED`**. `spawn-core`, `spawn-platform` (Wayland), `spawn-input`, `spawn-render` (Vulkan 1.3 clear frame) and the root `spawn-engine` composition binary implement the [foundation milestone](foundation/README.md); all other crates remain `SCAFFOLD` or `PLANNED`. The repository's root [AGENTS.md](../AGENTS.md) and crate-level `AGENTS.md` files remain the authoritative ownership and agent-behavior rules.
 
 ## Start here
 

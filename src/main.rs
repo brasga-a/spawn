@@ -1,7 +1,13 @@
-//! `spawn-engine`: composition root and sandbox binary.
-//!
-//! Placeholder: it does not start any engine subsystem yet.
+//! `spawn-engine` executable entry point.
 
-fn main() {
-    println!("Hello, world!");
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    match spawn_engine::run() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }

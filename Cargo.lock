@@ -206,6 +206,8 @@ version = "0.1.0"
 name = "spawn-engine"
 version = "0.1.0"
 dependencies = [
+ "spawn-core",
+ "spawn-input",
  "spawn-platform",
  "spawn-render",
 ]

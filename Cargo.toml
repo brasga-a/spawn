@@ -48,13 +48,19 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+spawn-core = { version = "0.1.0", path = "crates/spawn-core", default-features = false }
+spawn-input = { version = "0.1.0", path = "crates/spawn-input", default-features = false }
+spawn-platform = { version = "0.1.0", path = "crates/spawn-platform", default-features = false }
+spawn-render = { version = "0.1.0", path = "crates/spawn-render", default-features = false }
 
-# Manual smoke examples. The composition root is the only package that may
-# depend on both spawn-platform and spawn-render (SPN-INV-005, SPN-INV-006);
-# dev-dependencies keep them out of the `spawn-engine` binary itself.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-spawn-platform = { path = "crates/spawn-platform", features = ["wayland"] }
-spawn-render = { path = "crates/spawn-render", features = ["vulkan"] }
+# Native Linux runtime backends (Wayland + Vulkan 1.3). Kept target-conditional
+# so workspace checks and headless verification tests on targets without a
+# native backend yet (Windows CI) compile without Linux system libraries.
+# The composition root is the only package that depends on both spawn-platform
+# and spawn-render (SPN-INV-005, SPN-INV-006).
+[target.'cfg(target_os = "linux")'.dependencies]
+spawn-platform = { version = "0.1.0", path = "crates/spawn-platform", default-features = false, features = ["wayland"] }
+spawn-render = { version = "0.1.0", path = "crates/spawn-render", default-features = false, features = ["vulkan"] }
 
 [[example]]
 name = "vulkan_clear"
