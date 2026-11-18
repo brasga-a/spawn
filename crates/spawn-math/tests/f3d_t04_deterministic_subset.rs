@@ -554,3 +554,194 @@ fn f3d_t04_deterministic_camera_yaw_pitch_basis_and_quat_helpers() {
     );
     assert!(det::tan_f32(0.5).is_finite() && det::tan_f64(0.5).is_finite());
 }
+
+/// Formats `(yaw, pitch)` camera-helper bits as a Rust table literal so an
+/// intentional, reviewed change can be re-recorded from a failing run.
+fn format_camera_helper_table(rows: &[CameraHelperBits]) -> String {
+    let mut out = String::from("const GOLDEN_CAMERA_HELPERS: &[CameraHelperBits] = &[\n");
+    for row in rows {
+        out.push_str(&format!(
+            "    CameraHelperBits {{ yaw_bits: {:#018x}, pitch_bits: {:#018x}, quat: [{}], basis: [{}] }},\n",
+            row.yaw_bits,
+            row.pitch_bits,
+            row.quat.iter().map(|b| format!("{b:#010x}")).collect::<Vec<_>>().join(", "),
+            row.basis.iter().map(|b| format!("{b:#018x}")).collect::<Vec<_>>().join(", "),
+        ));
+    }
+    out.push_str("];\n");
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CameraHelperBits {
+    yaw_bits: u64,
+    pitch_bits: u64,
+    /// `det::quat_from_yaw_pitch_f64` as `[x, y, z, w]` `f32::to_bits()`.
+    quat: [u32; 4],
+    /// `det::yaw_pitch_basis_f64` as `right.xyz, up.xyz, forward.xyz` `f64::to_bits()`.
+    basis: [u64; 9],
+}
+
+fn camera_helper_bits(yaw: f64, pitch: f64) -> CameraHelperBits {
+    let q = det::quat_from_yaw_pitch_f64(yaw, pitch);
+    let b = det::yaw_pitch_basis_f64(yaw, pitch);
+    CameraHelperBits {
+        yaw_bits: yaw.to_bits(),
+        pitch_bits: pitch.to_bits(),
+        quat: [q.x.to_bits(), q.y.to_bits(), q.z.to_bits(), q.w.to_bits()],
+        basis: [
+            b.right.x.to_bits(),
+            b.right.y.to_bits(),
+            b.right.z.to_bits(),
+            b.up.x.to_bits(),
+            b.up.y.to_bits(),
+            b.up.z.to_bits(),
+            b.forward.x.to_bits(),
+            b.forward.y.to_bits(),
+            b.forward.z.to_bits(),
+        ],
+    }
+}
+
+/// `F3D-INV-08`: the deterministic `FreeCamera` orientation and basis helpers
+/// produce recorded IEEE-754 bit patterns, checked identically on Linux and
+/// Windows CI (not only within one process).
+#[test]
+fn f3d_t04_camera_yaw_pitch_helpers_match_recorded_golden_bits() {
+    let limit = std::f64::consts::FRAC_PI_2 - det::DEFAULT_PITCH_LIMIT_EPSILON_F64;
+    let inputs = [
+        (0.0_f64, 0.0_f64),
+        (0.65, -0.42),
+        (-2.35, 1.21),
+        (std::f64::consts::PI, -0.85),
+        (-std::f64::consts::PI + 1.0e-9, limit),
+        (1.0e-12, -limit),
+        (3.0, 0.001),
+    ];
+    let actual: Vec<CameraHelperBits> = inputs
+        .iter()
+        .map(|&(yaw, pitch)| camera_helper_bits(yaw, pitch))
+        .collect();
+    assert_eq!(
+        actual.as_slice(),
+        GOLDEN_CAMERA_HELPERS,
+        "camera helper bits changed; if intentional and reviewed, re-record:\n{}",
+        format_camera_helper_table(&actual)
+    );
+}
+
+/// Recorded on Linux x86_64 (Rust 1.99.1, pure-Rust `libm`); must match on every CI target.
+const GOLDEN_CAMERA_HELPERS: &[CameraHelperBits] = &[
+    CameraHelperBits {
+        yaw_bits: 0x0000000000000000,
+        pitch_bits: 0x0000000000000000,
+        quat: [0x00000000, 0x00000000, 0x80000000, 0x3f800000],
+        basis: [
+            0x3ff0000000000000,
+            0x0000000000000000,
+            0x8000000000000000,
+            0x0000000000000000,
+            0x3ff0000000000000,
+            0x0000000000000000,
+            0x8000000000000000,
+            0x0000000000000000,
+            0xbff0000000000000,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0x3fe4cccccccccccd,
+        pitch_bits: 0xbfdae147ae147ae1,
+        quat: [0xbe4a49cf, 0x3e9fe4fb, 0x3d885239, 0x3f6d44d8],
+        basis: [
+            0x3fe97984baf498c1,
+            0x0000000000000000,
+            0xbfe35dafe193d7ab,
+            0xbfcf9631e184527c,
+            0x3fed38064c1f6191,
+            0xbfd4c66f45c2cef0,
+            0xbfe1aecf27db37fe,
+            0xbfda18bf4c9f8d43,
+            0xbfe742b9f5175028,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0xc002cccccccccccd,
+        pitch_bits: 0x3ff35c28f5c28f5c,
+        quat: [0x3e608b89, 0xbf424836, 0x3f0658b4, 0x3ea25c3d],
+        basis: [
+            0xbfe67ca02266d8b0,
+            0x0000000000000000,
+            0x3fe6c463c3c6c9e8,
+            0xbfe54d2279e1f370,
+            0x3fd697deafc5cb30,
+            0xbfe509fdaf4c1a6a,
+            0x3fd01311bcdf5638,
+            0x3fedf090f809278d,
+            0x3fcfc0cd4ec9055f,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0x400921fb54442d18,
+        pitch_bits: 0xbfeb333333333333,
+        quat: [0xa3e8dda8, 0x3f6939d6, 0x3ed31bb6, 0x2480a1ac],
+        basis: [
+            0xbff0000000000000,
+            0x0000000000000000,
+            0xbca1a62633145c07,
+            0xbc9a84cb4032a6a2,
+            0x3fe51e94f96f971b,
+            0x3fe80a7d34468083,
+            0xbc974bcdfeb0a144,
+            0xbfe80a7d34468083,
+            0x3fe51e94f96f971b,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0xc00921fb5421d100,
+        pitch_bits: 0x3ff91de2c0cf70ae,
+        quat: [0x2fc24557, 0xbf351c1d, 0x3f34edc6, 0x2fc27719],
+        basis: [
+            0xbff0000000000000,
+            0x0000000000000000,
+            0x3e112e0c234c4c66,
+            0xbe112e0b932ece48,
+            0x3f50624da5218980,
+            0xbfeffffef390876c,
+            0x3d7197998c8dc962,
+            0x3feffffef390876c,
+            0x3f50624da5218980,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0x3d719799812dea11,
+        pitch_bits: 0xbff91de2c0cf70ae,
+        quat: [0xbf34edc6, 0x2ac721e2, 0x2ac6eeee, 0x3f351c1d],
+        basis: [
+            0x3ff0000000000000,
+            0x0000000000000000,
+            0xbd719799812dea11,
+            0xbd719798ed9afc51,
+            0x3f50624da5218980,
+            0xbfeffffef390876c,
+            0xbcd203af6c881fd7,
+            0xbfeffffef390876c,
+            0xbf50624da5218980,
+        ],
+    },
+    CameraHelperBits {
+        yaw_bits: 0x4008000000000000,
+        pitch_bits: 0x3f50624dd2f1a9fc,
+        quat: [0x381458bf, 0x3f7f5bd3, 0xba02be60, 0x3d90dea9],
+        basis: [
+            0xbfefae04be85e5d2,
+            0x0000000000000000,
+            0xbfc210386db6d55b,
+            0x3f227f336fd388d0,
+            0x3feffffef390876c,
+            0xbf5038542c005456,
+            0xbfc21037d6301070,
+            0x3f50624da5218a62,
+            0x3fefae03b4c62317,
+        ],
+    },
+];

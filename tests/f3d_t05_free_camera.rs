@@ -706,3 +706,141 @@ proptest! {
         }
     }
 }
+
+/// Extends [`build_scripted_tick_input`] past tick `48` with an integer-derived,
+/// platform-independent look/movement schedule so 600 ticks exercise many
+/// `sin_cos` arguments, pitch clamping, and yaw wrapping.
+fn golden_tick_input(tick_index: u64) -> CameraTickInput {
+    if tick_index < 48 {
+        return build_scripted_tick_input(tick_index);
+    }
+    let yaw_counts = ((tick_index * 37) % 101) as f64 - 50.0;
+    let pitch_counts = ((tick_index * 53) % 71) as f64 - 35.0;
+    let axis = |modulus: u64, offset: u64| match (tick_index + offset) % modulus {
+        0 => -1.0,
+        1 => 0.0,
+        _ => 1.0,
+    };
+    CameraTickInput {
+        move_forward_back: axis(3, 0),
+        move_right_left: axis(4, 1),
+        move_up_down: axis(5, 2),
+        look_yaw_delta: yaw_counts,
+        look_pitch_delta: pitch_counts,
+        look_enabled: !tick_index.is_multiple_of(7),
+    }
+}
+
+fn pose_bits(pose: &FreeCameraPose) -> [u64; 9] {
+    [
+        pose.world_pos.x.to_bits(),
+        pose.world_pos.y.to_bits(),
+        pose.world_pos.z.to_bits(),
+        pose.yaw_radians.to_bits(),
+        pose.pitch_radians.to_bits(),
+        u64::from(pose.orientation.x.to_bits()),
+        u64::from(pose.orientation.y.to_bits()),
+        u64::from(pose.orientation.z.to_bits()),
+        u64::from(pose.orientation.w.to_bits()),
+    ]
+}
+
+/// `F3D-T05c` (`F3D-FR-03`, `F3D-INV-08`): a fixed `InputCommand`-equivalent
+/// schedule stepped for 600 ticks at 60 Hz yields **recorded** IEEE-754 pose
+/// bit patterns at ticks 1, 60, 300, and 600. Unlike the cadence-equivalence
+/// tests (self-consistency within one process), this table is compared on
+/// both Linux and Windows CI, proving cross-platform bit identity.
+#[test]
+fn f3d_t05c_cross_platform_golden_pose_bits() {
+    const CHECKPOINTS: [u64; 4] = [1, 60, 300, 600];
+    let tick_dt = FixedStepConfig::default().tick_duration();
+    let mut camera = FreeCamera::new(FreeCameraConfig::default()).unwrap();
+    let mut actual: Vec<(u64, [u64; 9])> = Vec::new();
+    for tick_index in 0..600_u64 {
+        camera.step_tick(
+            Tick::new(tick_index),
+            tick_dt,
+            golden_tick_input(tick_index),
+        );
+        let executed = tick_index + 1;
+        if CHECKPOINTS.contains(&executed) {
+            let pose = camera.curr_pose();
+            assert!(pose.is_finite(), "pose at tick {executed} must stay finite");
+            actual.push((executed, pose_bits(pose)));
+        }
+    }
+
+    let mut table = String::from("const GOLDEN_POSES: &[(u64, [u64; 9])] = &[\n");
+    for (tick, bits) in &actual {
+        let cols: Vec<String> = bits.iter().map(|b| format!("{b:#018x}")).collect();
+        table.push_str(&format!("    ({tick}, [{}]),\n", cols.join(", ")));
+    }
+    table.push_str("];\n");
+    assert_eq!(
+        actual.as_slice(),
+        GOLDEN_POSES,
+        "FreeCamera pose bits changed; if intentional and reviewed, re-record:\n{table}"
+    );
+}
+
+/// Columns: `world_pos.{x,y,z}`, `yaw`, `pitch` (`f64::to_bits`), then
+/// `orientation.{x,y,z,w}` (`f32::to_bits` widened). Recorded on Linux x86_64
+/// (Rust 1.99.1, pure-Rust `libm`); must match on every CI target.
+const GOLDEN_POSES: &[(u64, [u64; 9])] = &[
+    (
+        1,
+        [
+            0x0000000000000000,
+            0x3ff8000000000000,
+            0xbfb99999886b8db2,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000080000000,
+            0x000000003f800000,
+        ],
+    ),
+    (
+        60,
+        [
+            0x3fd173377dedc081,
+            0x4009016d4828865f,
+            0xbff12d9b4f6734c5,
+            0xbff1320808a31c1e,
+            0x3ff3cc67cb45dbed,
+            0x000000003eff191f,
+            0x00000000bed57ee4,
+            0x000000003e97ff9b,
+            0x000000003f33277e,
+        ],
+    ),
+    (
+        300,
+        [
+            0xc00a7a58d31f5278,
+            0x4016e49bc67addeb,
+            0x4013a8b45f27efc6,
+            0xbff2fd9a42cce399,
+            0x3ff2d91a612fbd9d,
+            0x000000003eebcc31,
+            0x00000000beee142f,
+            0x000000003e9f1026,
+            0x000000003f307746,
+        ],
+    ),
+    (
+        600,
+        [
+            0xc01e3de287be9a8c,
+            0x402204f88cab9c36,
+            0x4029182a719adbef,
+            0xbfefff4d190e8399,
+            0x3ff0ce7415003a21,
+            0x000000003ee14a36,
+            0x00000000bed45db7,
+            0x000000003e7620be,
+            0x000000003f4262ef,
+        ],
+    ),
+];
