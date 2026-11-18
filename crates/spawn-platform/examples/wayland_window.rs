@@ -1,11 +1,17 @@
-//! Manual smoke test of the Wayland backend (foundation Phase 2).
+//! Manual smoke test of the Wayland backend (foundation Phases 2 and 2b).
 //!
 //! Opens one window, prints every raw event in delivery order and exits on the
-//! first close request (window-manager close) or Escape. Set
-//! `SPAWN_SMOKE_SECONDS=<n>` to close automatically after `n` seconds.
+//! first close request (window-manager close) or Escape. Keys `L` and `C`
+//! toggle [`CursorGrabMode::Locked`] and [`CursorGrabMode::Confined`]; `U`
+//! releases any constraint to [`CursorGrabMode::None`]. Set
+//! `SPAWN_SMOKE_SECONDS=<n>` to close automatically after `n` seconds, and
+//! `SPAWN_SMOKE_GRAB=locked|confined` to request a cursor constraint on
+//! startup (automatically released halfway through when `SPAWN_SMOKE_SECONDS`
+//! is also set).
 //!
 //! ```text
 //! cargo run -p spawn-platform --features wayland --example wayland_window
+//! SPAWN_SMOKE_SECONDS=2 SPAWN_SMOKE_GRAB=locked cargo run -p spawn-platform --features wayland --example wayland_window
 //! ```
 //!
 //! A Wayland surface is shown only once it has content, and presenting content
@@ -22,8 +28,8 @@ use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use spawn_platform::{
-    ElementState, Event, KeyCode, LogicalSize, PhysicalSize, Platform, PumpMode, WindowDescriptor,
-    WindowEvent,
+    CursorGrabMode, ElementState, Event, KeyCode, LogicalSize, PhysicalSize, Platform, PumpMode,
+    WindowDescriptor, WindowEvent,
 };
 use wayland_client::backend::{Backend, ObjectId};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -45,6 +51,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok()
         .and_then(|seconds| seconds.parse().ok())
         .map(Duration::from_secs);
+    let smoke_grab = match std::env::var("SPAWN_SMOKE_GRAB").as_deref() {
+        Ok("locked") => Some(CursorGrabMode::Locked),
+        Ok("confined") => Some(CursorGrabMode::Confined),
+        Ok("none") | Err(_) => None,
+        Ok(other) => return Err(format!("unknown SPAWN_SMOKE_GRAB={other:?}").into()),
+    };
 
     let mut platform = Platform::new()?;
     let descriptor =
@@ -65,7 +77,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut painter = Painter::new(&window)?;
     painter.paint(size)?;
 
+    if let Some(mode) = smoke_grab {
+        eprintln!("requesting initial cursor grab: {mode:?}");
+        platform.set_cursor_grab(window.id(), mode)?;
+    }
+
     let started = Instant::now();
+    let mut auto_released_grab = smoke_grab.is_none();
     let mut events = Vec::new();
     let mut close_requests = 0_u32;
     let mut escape = false;
@@ -83,13 +101,26 @@ fn run() -> Result<(), Box<dyn Error>> {
             match event {
                 WindowEvent::CloseRequested => close_requests += 1,
                 WindowEvent::Resized(size) => painter.paint(*size)?,
-                WindowEvent::Key(key)
-                    if key.key == KeyCode::Escape && key.state == ElementState::Pressed =>
-                {
-                    escape = true;
+                WindowEvent::Key(key) if key.state == ElementState::Pressed => match key.key {
+                    KeyCode::Escape => escape = true,
+                    KeyCode::L => toggle_grab(&mut platform, window.id(), CursorGrabMode::Locked),
+                    KeyCode::C => toggle_grab(&mut platform, window.id(), CursorGrabMode::Confined),
+                    KeyCode::U => set_grab(&mut platform, window.id(), CursorGrabMode::None),
+                    _ => {}
+                },
+                WindowEvent::CursorGrabChanged(mode) => {
+                    eprintln!(
+                        "active cursor grab reported: {mode:?} (query: {:?})",
+                        platform.cursor_grab(window.id())
+                    );
                 }
                 _ => {}
             }
+        }
+        if !auto_released_grab && auto_close.is_some_and(|limit| started.elapsed() >= limit / 2) {
+            eprintln!("releasing smoke cursor grab after {:?}", started.elapsed());
+            platform.set_cursor_grab(window.id(), CursorGrabMode::None)?;
+            auto_released_grab = true;
         }
         if auto_close.is_some_and(|limit| started.elapsed() >= limit) {
             eprintln!("auto-close after {:?}", started.elapsed());
@@ -105,6 +136,21 @@ fn run() -> Result<(), Box<dyn Error>> {
         "closed cleanly ({close_requests} close request(s) in the last batch, escape: {escape})"
     );
     Ok(())
+}
+
+fn toggle_grab(platform: &mut Platform, window: spawn_platform::WindowId, target: CursorGrabMode) {
+    let next = if platform.cursor_grab(window) == Some(target) {
+        CursorGrabMode::None
+    } else {
+        target
+    };
+    set_grab(platform, window, next);
+}
+
+fn set_grab(platform: &mut Platform, window: spawn_platform::WindowId, mode: CursorGrabMode) {
+    if let Err(error) = platform.set_cursor_grab(window, mode) {
+        eprintln!("{error}");
+    }
 }
 
 /// Stand-in renderer: presents a solid color through `wl_shm`.

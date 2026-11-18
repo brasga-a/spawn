@@ -7,15 +7,20 @@
 //! Protocols: `wl_compositor` (required, up to v6), `xdg_wm_base` (required,
 //! up to v6), `wl_seat` (optional, up to v8; first seat only),
 //! `wp_viewporter` + `wp_fractional_scale_v1` (optional; scale stays 1.0
-//! without the viewporter) and `zxdg_decoration_manager_v1` (optional;
-//! server-side decorations are requested when present).
+//! without the viewporter), `zxdg_decoration_manager_v1` (optional;
+//! server-side decorations are requested when present),
+//! `zwp_relative_pointer_manager_v1` (optional, v1; unaccelerated relative
+//! pointer motion) and `zwp_pointer_constraints_v1` (optional, v1; oneshot
+//! cursor lock and confinement).
 //!
 //! `libwayland-client` is loaded at runtime; its absence is reported as
 //! `PLAT-0001`.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::os::fd::AsFd;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use raw_window_handle::{
@@ -34,6 +39,12 @@ use wayland_client::{
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
 };
+use wayland_protocols::wp::pointer_constraints::zv1::client::{
+    zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
+};
+use wayland_protocols::wp::relative_pointer::zv1::client::{
+    zwp_relative_pointer_manager_v1, zwp_relative_pointer_v1,
+};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
@@ -41,8 +52,8 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 use crate::error::{PlatformError, PlatformErrorKind};
-use crate::event::{ElementState, Event, WindowId};
-use crate::linux::translate::{Axis, SurfaceMetrics, SurfaceUpdate, Translator};
+use crate::event::{CursorGrabMode, ElementState, Event, WindowId};
+use crate::linux::translate::{Axis, ConstraintId, SurfaceMetrics, SurfaceUpdate, Translator};
 use crate::window::WindowDescriptor;
 
 /// How long window creation waits for the compositor's first configure.
@@ -59,6 +70,40 @@ pub(crate) struct WaylandPlatform {
     _not_send: NotSend,
 }
 
+enum WaylandConstraint {
+    Locked(zwp_locked_pointer_v1::ZwpLockedPointerV1),
+    Confined(zwp_confined_pointer_v1::ZwpConfinedPointerV1),
+}
+
+impl WaylandConstraint {
+    fn destroy(self) {
+        match self {
+            Self::Locked(locked) => locked.destroy(),
+            Self::Confined(confined) => confined.destroy(),
+        }
+    }
+}
+
+/// Shared single-threaded slot so either [`WaylandWindow::drop`] or
+/// [`WaylandPlatform`] destroys a window's constraint before the surface or
+/// pointer it extends.
+#[derive(Clone, Default)]
+struct ConstraintSlot(Rc<Cell<Option<WaylandConstraint>>>);
+
+impl ConstraintSlot {
+    fn set(&self, constraint: WaylandConstraint) {
+        if let Some(previous) = self.0.replace(Some(constraint)) {
+            previous.destroy();
+        }
+    }
+
+    fn destroy(&self) {
+        if let Some(existing) = self.0.take() {
+            existing.destroy();
+        }
+    }
+}
+
 /// Protocol objects of one window. Destroyed in protocol order on drop.
 pub(crate) struct WaylandWindow {
     id: WindowId,
@@ -69,6 +114,7 @@ pub(crate) struct WaylandWindow {
     viewport: Option<wp_viewport::WpViewport>,
     fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
+    constraint: ConstraintSlot,
     _not_send: NotSend,
 }
 
@@ -79,6 +125,8 @@ struct Globals {
     viewporter: Option<wp_viewporter::WpViewporter>,
     fractional_scale: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     decorations: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
+    relative_pointer_manager: Option<zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1>,
+    pointer_constraints: Option<zwp_pointer_constraints_v1::ZwpPointerConstraintsV1>,
     seat: Option<wl_seat::WlSeat>,
 }
 
@@ -89,6 +137,7 @@ struct SurfaceRecord {
     xdg_surface: xdg_surface::XdgSurface,
     viewport: Option<wp_viewport::WpViewport>,
     has_fractional_scale: bool,
+    constraint: ConstraintSlot,
 }
 
 /// Dispatch state.
@@ -98,6 +147,7 @@ struct State {
     surfaces: Vec<SurfaceRecord>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
 }
 
 impl WaylandPlatform {
@@ -124,6 +174,7 @@ impl WaylandPlatform {
                 surfaces: Vec::new(),
                 keyboard: None,
                 pointer: None,
+                relative_pointer: None,
             },
             _not_send: PhantomData,
         };
@@ -165,12 +216,14 @@ impl WaylandPlatform {
         });
         surface.commit();
 
+        let constraint = ConstraintSlot::default();
         self.state.surfaces.push(SurfaceRecord {
             id,
             surface: surface.clone(),
             xdg_surface: xdg_surface.clone(),
             viewport: viewport.clone(),
             has_fractional_scale: fractional_scale.is_some(),
+            constraint: constraint.clone(),
         });
         let window = WaylandWindow {
             id,
@@ -181,6 +234,7 @@ impl WaylandPlatform {
             viewport,
             fractional_scale,
             decoration,
+            constraint,
             _not_send: PhantomData,
         };
 
@@ -223,6 +277,94 @@ impl WaylandPlatform {
             .flatten()
     }
 
+    /// Currently active cursor constraint of a live window.
+    pub(crate) fn cursor_grab(&self, id: WindowId) -> Option<CursorGrabMode> {
+        self.state
+            .surfaces
+            .iter()
+            .any(|record| record.id == id && record.surface.is_alive())
+            .then(|| self.state.translator.cursor_grab(id))
+            .flatten()
+    }
+
+    /// Requests a cursor constraint (`None`, `Confined` or `Locked`) on `id`.
+    pub(crate) fn set_cursor_grab(
+        &mut self,
+        id: WindowId,
+        mode: CursorGrabMode,
+    ) -> Result<(), PlatformError> {
+        self.forget_destroyed_windows();
+        let Some(surface_index) = self
+            .state
+            .surfaces
+            .iter()
+            .position(|record| record.id == id)
+        else {
+            return Err(PlatformError::new(PlatformErrorKind::CursorGrabFailed)
+                .with_detail(format!("window {id:?} does not exist or was destroyed")));
+        };
+        if mode != CursorGrabMode::None {
+            if self.state.globals.pointer_constraints.is_none() {
+                return Err(PlatformError::new(PlatformErrorKind::CursorGrabFailed)
+                    .with_detail("Wayland global `zwp_pointer_constraints_v1` is not available"));
+            }
+            if mode == CursorGrabMode::Locked
+                && self.state.globals.relative_pointer_manager.is_none()
+            {
+                return Err(
+                    PlatformError::new(PlatformErrorKind::CursorGrabFailed).with_detail(
+                        "Wayland global `zwp_relative_pointer_manager_v1` is not available",
+                    ),
+                );
+            }
+            if self.state.pointer.is_none() {
+                return Err(PlatformError::new(PlatformErrorKind::CursorGrabFailed)
+                    .with_detail("no Wayland pointer device is available on the seat"));
+            }
+        }
+
+        let Some(update) = self.state.translator.request_cursor_grab(id, mode) else {
+            return Err(PlatformError::new(PlatformErrorKind::CursorGrabFailed)
+                .with_detail(format!("window {id:?} does not exist or was destroyed")));
+        };
+        let record = &self.state.surfaces[surface_index];
+        if update.destroy_previous {
+            record.constraint.destroy();
+        }
+        if let Some((cid, requested)) = update.create
+            && let (Some(constraints), Some(pointer)) = (
+                self.state.globals.pointer_constraints.as_ref(),
+                self.state.pointer.as_ref(),
+            )
+        {
+            let qh = self.queue.handle();
+            let lifetime = zwp_pointer_constraints_v1::Lifetime::Oneshot;
+            let created = match requested {
+                CursorGrabMode::Locked => WaylandConstraint::Locked(constraints.lock_pointer(
+                    &record.surface,
+                    pointer,
+                    None,
+                    lifetime,
+                    &qh,
+                    (id, cid),
+                )),
+                CursorGrabMode::Confined => {
+                    WaylandConstraint::Confined(constraints.confine_pointer(
+                        &record.surface,
+                        pointer,
+                        None,
+                        lifetime,
+                        &qh,
+                        (id, cid),
+                    ))
+                }
+                CursorGrabMode::None => return Ok(()),
+            };
+            record.constraint.set(created);
+        }
+        self.flush()
+    }
+
     /// The `wl_display` pointer for surface creation.
     pub(crate) fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         display_handle(&self.connection)
@@ -238,6 +380,7 @@ impl WaylandPlatform {
         surfaces.retain(|record| {
             let alive = record.surface.is_alive();
             if !alive {
+                record.constraint.destroy();
                 translator.remove_window(record.id);
             }
             alive
@@ -251,6 +394,18 @@ impl WaylandPlatform {
             .map_err(|error| self.dispatch_error(&error))
     }
 
+    #[track_caller]
+    fn flush(&self) -> Result<(), PlatformError> {
+        match self.connection.flush() {
+            // The socket is full; the requests stay buffered for the next pump.
+            Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(())
+            }
+            Err(error) => Err(self.connection_error(&error)),
+            Ok(()) => Ok(()),
+        }
+    }
+
     /// One pump step: dispatch queued messages, flush requests, wait for the
     /// socket when nothing is queued, read and dispatch what arrived.
     fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), PlatformError> {
@@ -258,12 +413,7 @@ impl WaylandPlatform {
             .queue
             .dispatch_pending(&mut self.state)
             .map_err(|error| self.dispatch_error(&error))?;
-        match self.connection.flush() {
-            // The socket is full; the requests stay buffered for the next pump.
-            Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => return Err(self.connection_error(&error)),
-            Ok(()) => {}
-        }
+        self.flush()?;
         let timeout = if dispatched > 0 {
             Some(Duration::ZERO)
         } else {
@@ -283,7 +433,8 @@ impl WaylandPlatform {
         self.queue
             .dispatch_pending(&mut self.state)
             .map(drop)
-            .map_err(|error| self.dispatch_error(&error))
+            .map_err(|error| self.dispatch_error(&error))?;
+        self.flush()
     }
 
     #[track_caller]
@@ -311,9 +462,13 @@ impl WaylandPlatform {
 
 impl Drop for WaylandPlatform {
     fn drop(&mut self) {
-        // Input devices and the seat are released explicitly; the remaining
-        // globals go away with the connection (`xdg_wm_base` must outlive any
-        // window still owned by the caller).
+        // Extension objects and input devices are released in dependency order;
+        // `xdg_wm_base` and `wl_compositor` go away with the connection so they
+        // outlive any window still owned by the caller.
+        self.state.destroy_all_constraints();
+        if let Some(relative) = self.state.relative_pointer.take() {
+            relative.destroy();
+        }
         if let Some(keyboard) = self
             .state
             .keyboard
@@ -338,6 +493,12 @@ impl Drop for WaylandPlatform {
             .filter(|seat| seat.version() >= 5)
         {
             seat.release();
+        }
+        if let Some(constraints) = self.state.globals.pointer_constraints.take() {
+            constraints.destroy();
+        }
+        if let Some(relative_manager) = self.state.globals.relative_pointer_manager.take() {
+            relative_manager.destroy();
         }
         // A failed flush means the connection is already gone; `Drop` cannot
         // report it.
@@ -370,6 +531,7 @@ impl WaylandWindow {
 impl Drop for WaylandWindow {
     fn drop(&mut self) {
         // Role and extension objects go before the objects they extend.
+        self.constraint.destroy();
         if let Some(decoration) = &self.decoration {
             decoration.destroy();
         }
@@ -425,6 +587,8 @@ impl Globals {
             viewporter: globals.bind(qh, 1..=1, ()).ok(),
             fractional_scale: globals.bind(qh, 1..=1, ()).ok(),
             decorations: globals.bind(qh, 1..=1, ()).ok(),
+            relative_pointer_manager: globals.bind(qh, 1..=1, ()).ok(),
+            pointer_constraints: globals.bind(qh, 1..=1, ()).ok(),
             seat: globals.bind(qh, 1..=8, ()).ok(),
         })
     }
@@ -444,6 +608,18 @@ impl State {
         self.surfaces.iter().find(|record| record.id == id)
     }
 
+    fn destroy_constraint(&self, id: WindowId) {
+        if let Some(record) = self.record(id) {
+            record.constraint.destroy();
+        }
+    }
+
+    fn destroy_all_constraints(&self) {
+        for record in &self.surfaces {
+            record.constraint.destroy();
+        }
+    }
+
     fn apply(&self, id: WindowId, update: SurfaceUpdate) {
         let Some(record) = self.record(id) else {
             return;
@@ -454,9 +630,10 @@ impl State {
         {
             viewport.set_destination(width, height);
         }
-        // Commit so the acknowledged state applies even before the renderer
-        // presents the next frame.
-        record.surface.commit();
+        // Do not call `wl_surface.commit()` here: `ack_configure` and
+        // `wp_viewport.set_destination` stay pending and apply atomically when
+        // the renderer (or Vulkan WSI) commits the matching buffer, avoiding
+        // stretching of the previous frame and commits behind WSI's back.
     }
 }
 
@@ -491,6 +668,8 @@ delegate_noop!(State: ignore wp_viewporter::WpViewporter);
 delegate_noop!(State: ignore wp_viewport::WpViewport);
 delegate_noop!(State: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(State: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
+delegate_noop!(State: ignore zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1);
+delegate_noop!(State: ignore zwp_pointer_constraints_v1::ZwpPointerConstraintsV1);
 
 impl Dispatch<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1, WindowId> for State {
     fn event(
@@ -623,15 +802,39 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         match (keyboard, state.keyboard.take()) {
             (true, None) => state.keyboard = Some(seat.get_keyboard(qh, ())),
             (true, Some(existing)) => state.keyboard = Some(existing),
-            (false, Some(removed)) if removed.version() >= 3 => removed.release(),
-            (false, _) => {}
+            (false, Some(removed)) => {
+                if let Some(unfocused) = state.translator.keyboard_capability_lost() {
+                    state.destroy_constraint(unfocused);
+                }
+                if removed.version() >= 3 {
+                    removed.release();
+                }
+            }
+            (false, None) => {}
         }
         let pointer = capabilities.contains(wl_seat::Capability::Pointer);
         match (pointer, state.pointer.take()) {
-            (true, None) => state.pointer = Some(seat.get_pointer(qh, ())),
+            (true, None) => {
+                let wl_pointer = seat.get_pointer(qh, ());
+                state.relative_pointer = state
+                    .globals
+                    .relative_pointer_manager
+                    .as_ref()
+                    .map(|manager| manager.get_relative_pointer(&wl_pointer, qh, ()));
+                state.pointer = Some(wl_pointer);
+            }
             (true, Some(existing)) => state.pointer = Some(existing),
-            (false, Some(removed)) if removed.version() >= 3 => removed.release(),
-            (false, _) => {}
+            (false, Some(removed)) => {
+                state.destroy_all_constraints();
+                state.translator.pointer_capability_lost();
+                if let Some(relative) = state.relative_pointer.take() {
+                    relative.destroy();
+                }
+                if removed.version() >= 3 {
+                    removed.release();
+                }
+            }
+            (false, None) => {}
         }
     }
 }
@@ -649,13 +852,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
             // Physical keys need no keymap; dropping the descriptor closes it.
             wl_keyboard::Event::Keymap { fd, .. } => drop(fd),
             wl_keyboard::Event::Enter { surface, .. } => {
-                if let Some(id) = window_of(&surface) {
-                    state.translator.keyboard_enter(id);
+                if let Some(id) = window_of(&surface)
+                    && let Some(unfocused) = state.translator.keyboard_enter(id)
+                {
+                    state.destroy_constraint(unfocused);
                 }
             }
             wl_keyboard::Event::Leave { surface, .. } => {
-                if let Some(id) = window_of(&surface) {
-                    state.translator.keyboard_leave(id);
+                if let Some(id) = window_of(&surface)
+                    && state.translator.keyboard_leave(id)
+                {
+                    state.destroy_constraint(id);
                 }
             }
             wl_keyboard::Event::Key {
@@ -682,7 +889,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let translator = &mut state.translator;
         match event {
             wl_pointer::Event::Enter {
                 surface,
@@ -690,25 +896,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 surface_y,
                 ..
             } => {
-                if let Some(id) = window_of(&surface) {
-                    translator.pointer_enter(id, surface_x, surface_y);
+                if let Some(id) = window_of(&surface)
+                    && let Some(previous) = state.translator.pointer_enter(id, surface_x, surface_y)
+                {
+                    state.destroy_constraint(previous);
                 }
             }
             wl_pointer::Event::Leave { surface, .. } => {
-                if let Some(id) = window_of(&surface) {
-                    translator.pointer_leave(id);
+                if let Some(id) = window_of(&surface)
+                    && state.translator.pointer_leave(id)
+                {
+                    state.destroy_constraint(id);
                 }
             }
             wl_pointer::Event::Motion {
                 surface_x,
                 surface_y,
                 ..
-            } => translator.pointer_motion(surface_x, surface_y),
+            } => state.translator.pointer_motion(surface_x, surface_y),
             wl_pointer::Event::Button {
                 button,
                 state: WEnum::Value(button_state),
                 ..
-            } => translator.pointer_button(
+            } => state.translator.pointer_button(
                 button,
                 element_state(button_state == wl_pointer::ButtonState::Pressed),
             ),
@@ -718,10 +928,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 ..
             } => {
                 if let Some(axis) = scroll_axis(axis) {
-                    translator.pointer_axis(axis, value);
+                    state.translator.pointer_axis(axis, value);
                     // Before version 5 there are no frame events.
                     if pointer.version() < 5 {
-                        translator.pointer_frame();
+                        state.translator.pointer_frame();
                     }
                 }
             }
@@ -730,10 +940,83 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 value120,
             } => {
                 if let Some(axis) = scroll_axis(axis) {
-                    translator.pointer_axis_value_120(axis, value120);
+                    state.translator.pointer_axis_value_120(axis, value120);
                 }
             }
-            wl_pointer::Event::Frame => translator.pointer_frame(),
+            wl_pointer::Event::Frame => state.translator.pointer_frame(),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_relative_pointer_v1::ZwpRelativePointerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &zwp_relative_pointer_v1::ZwpRelativePointerV1,
+        event: zwp_relative_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // `wayland-client` already decodes `wl_fixed_t` (`i32 / 256.0`) to `f64`.
+        if let zwp_relative_pointer_v1::Event::RelativeMotion {
+            dx_unaccel,
+            dy_unaccel,
+            ..
+        } = event
+        {
+            state
+                .translator
+                .pointer_relative_motion(dx_unaccel, dy_unaccel);
+        }
+    }
+}
+
+impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, (WindowId, ConstraintId)> for State {
+    fn event(
+        state: &mut Self,
+        _: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+        event: zwp_locked_pointer_v1::Event,
+        &(id, cid): &(WindowId, ConstraintId),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => {
+                state
+                    .translator
+                    .constraint_activated(id, cid, CursorGrabMode::Locked);
+            }
+            zwp_locked_pointer_v1::Event::Unlocked
+                if state.translator.constraint_deactivated(id, cid) =>
+            {
+                state.destroy_constraint(id);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_confined_pointer_v1::ZwpConfinedPointerV1, (WindowId, ConstraintId)> for State {
+    fn event(
+        state: &mut Self,
+        _: &zwp_confined_pointer_v1::ZwpConfinedPointerV1,
+        event: zwp_confined_pointer_v1::Event,
+        &(id, cid): &(WindowId, ConstraintId),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_confined_pointer_v1::Event::Confined => {
+                state
+                    .translator
+                    .constraint_activated(id, cid, CursorGrabMode::Confined);
+            }
+            zwp_confined_pointer_v1::Event::Unconfined
+                if state.translator.constraint_deactivated(id, cid) =>
+            {
+                state.destroy_constraint(id);
+            }
             _ => {}
         }
     }
