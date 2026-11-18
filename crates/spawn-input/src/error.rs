@@ -16,7 +16,8 @@ pub enum InputErrorKind {
     /// `INPT-0002`: an axis sensitivity is non-finite, `<= 0.0`, or exceeds
     /// [`crate::AxisConfig::MAX_SENSITIVITY`].
     InvalidSensitivity,
-    /// `INPT-0003`: an axis clamp range has non-finite bounds or `min > max`.
+    /// `INPT-0003`: an axis clamp range or magnitude cap has non-finite bounds,
+    /// `min > max`, or excludes neutral `0.0` (`min <= 0.0 <= max`).
     InvalidAxisRange,
     /// `INPT-0004`: a binding parameter is invalid (for example binding
     /// [`spawn_platform::KeyCode::Unidentified`] instead of a native code,
@@ -53,7 +54,7 @@ impl InputErrorKind {
                 "axis sensitivity must be finite, positive, and within the supported maximum"
             }
             Self::InvalidAxisRange => {
-                "axis range bounds must be finite with minimum less than or equal to maximum"
+                "axis range bounds must be finite and include neutral zero (min <= 0.0 <= max)"
             }
             Self::InvalidBinding => "input binding configuration is invalid",
             Self::IdOutOfRange => "input identifier exceeds the supported capacity",

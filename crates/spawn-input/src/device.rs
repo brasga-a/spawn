@@ -244,6 +244,7 @@ impl CodeSlot {
 pub struct DeviceState {
     focused: bool,
     focused_window: Option<WindowId>,
+    pointer_window: Option<WindowId>,
 
     key_down: BitSet128,
     key_pending_pressed: BitSet128,
@@ -290,6 +291,7 @@ impl DeviceState {
         Self {
             focused: false,
             focused_window: None,
+            pointer_window: None,
             key_down: BitSet128([0; KEY_WORDS]),
             key_pending_pressed: BitSet128([0; KEY_WORDS]),
             key_pending_released: BitSet128([0; KEY_WORDS]),
@@ -347,6 +349,12 @@ impl DeviceState {
     /// [`InputState::handle_event`](crate::InputState::handle_event).
     pub const fn focused_window(&self) -> Option<WindowId> {
         self.focused_window
+    }
+
+    /// Identifier of the window currently holding pointer focus, when tracked
+    /// via [`InputState::handle_event`](crate::InputState::handle_event).
+    pub const fn pointer_window(&self) -> Option<WindowId> {
+        self.pointer_window
     }
 
     /// Whether `key` is physically held down right now (before the next tick
@@ -503,22 +511,57 @@ impl DeviceState {
                 {
                     self.focused = false;
                     self.focused_window = None;
-                    self.release_held();
+                    self.release_keyboard();
+                    self.cursor_anchor_valid = false;
+                }
+                if window.is_none()
+                    || self.pointer_window.is_none()
+                    || self.pointer_window == window
+                {
+                    self.pointer_window = None;
+                    self.cursor_position = None;
+                    self.cursor_anchor_valid = false;
+                    self.release_mouse_buttons();
                 }
             }
             WindowEvent::Key(key_event) => self.apply_key_event(*key_event),
             WindowEvent::PointerEntered(position) => {
+                if let (Some(prev), Some(next)) = (self.pointer_window, window)
+                    && prev != next
+                {
+                    self.release_mouse_buttons();
+                    self.cursor_position = None;
+                    self.cursor_anchor_valid = false;
+                }
+                if window.is_some() {
+                    self.pointer_window = window;
+                }
                 if let (Some(x), Some(y)) = (sanitize_f64(position.x), sanitize_f64(position.y)) {
                     self.cursor_position = Some(PhysicalPosition::new(x, y));
                     self.cursor_anchor_valid = true;
                 }
             }
             WindowEvent::PointerLeft => {
-                self.release_mouse_buttons();
-                self.cursor_position = None;
-                self.cursor_anchor_valid = false;
+                if window.is_none()
+                    || self.pointer_window.is_none()
+                    || self.pointer_window == window
+                {
+                    self.pointer_window = None;
+                    self.release_mouse_buttons();
+                    self.cursor_position = None;
+                    self.cursor_anchor_valid = false;
+                }
             }
             WindowEvent::PointerMoved(position) => {
+                if let (Some(prev), Some(next)) = (self.pointer_window, window)
+                    && prev != next
+                {
+                    self.cursor_position = None;
+                    self.cursor_anchor_valid = false;
+                }
+                if window.is_some() {
+                    self.pointer_window = window;
+                }
                 if let (Some(x), Some(y)) = (sanitize_f64(position.x), sanitize_f64(position.y)) {
                     if self.cursor_anchor_valid
                         && let Some(prev) = self.cursor_position
@@ -535,7 +578,15 @@ impl DeviceState {
                 }
             }
             WindowEvent::PointerButton { button, state } => {
-                self.apply_mouse_button(*button, *state);
+                if window.is_none()
+                    || self.pointer_window.is_none()
+                    || self.pointer_window == window
+                {
+                    if self.pointer_window.is_none() && window.is_some() {
+                        self.pointer_window = window;
+                    }
+                    self.apply_mouse_button(*button, *state);
+                }
             }
             WindowEvent::Scroll(delta) => match *delta {
                 ScrollDelta::Lines { x, y } => {
@@ -645,6 +696,7 @@ impl DeviceState {
             DeviceKind::Keyboard => self.release_keyboard(),
             DeviceKind::Mouse => {
                 self.release_mouse_buttons();
+                self.pointer_window = None;
                 self.cursor_position = None;
                 self.cursor_anchor_valid = false;
             }

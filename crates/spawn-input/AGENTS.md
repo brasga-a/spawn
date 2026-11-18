@@ -61,7 +61,7 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 | `InputState` | `state` | Coordinates `DeviceState`, `InputMap`, active `ContextId` bitmask, and `sample_tick(Tick) -> InputCommand` |
 | `DeviceState`, `ButtonState`, `PointerDelta`, `ScrollVector`, `DeviceKind` | `device` | Allocation-free tracking of named `KeyCode`s, `native_code` keys, `MouseButton`s, cursor position, surface cursor delta, unaccelerated relative motion delta, scroll lines/pixels, and focus |
 | `ActionId`, `AxisId`, `ContextId` | `action` | Validated caller-defined identifiers (`MAX_ACTIONS = 64`, `MAX_AXES = 16`, `MAX_CONTEXTS = 16`; `ContextId::GLOBAL = 0`) |
-| `ButtonTrigger`, `AxisSource`, `MotionAxis`, `AxisConfig`, `InputMap` | `action` | Data-driven bindings, atomic rebinding, axial dead zone (`[0.0, 1.0)`), sensitivity (`(0.0, 10_000.0]`), inversion, optional `[min, max]` clamp |
+| `ButtonTrigger`, `AxisSource`, `MotionAxis`, `AxisConfig`, `InputMap` | `action` | Data-driven bindings, atomic rebinding, axial dead zone (`[0.0, 1.0)`), sensitivity (`(0.0, 10_000.0]`), inversion, optional zero-inclusive `[min, max]` clamp |
 | `InputCommand`, `CommandValidation` | `command` | 96-byte `Copy` tick-indexed intent (`pressed`/`held`/`released` `u64` masks + `[f32; 16]` axes) and standalone or map-derived validation |
 | `InputError`, `InputErrorKind` | `error` | Hand-written, `#[track_caller]` located, coded (`INPT-0001`..`INPT-0006`), detail, flattened cause, optional backtrace (ADR-0009) |
 
@@ -71,7 +71,7 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 | --- | --- | --- |
 | `INPT-0001` | `InvalidDeadZone` | Axis dead zone is non-finite, `< 0.0`, or `>= 1.0` |
 | `INPT-0002` | `InvalidSensitivity` | Axis sensitivity is non-finite, `<= 0.0`, or above `AxisConfig::MAX_SENSITIVITY` |
-| `INPT-0003` | `InvalidAxisRange` | Axis clamp range or magnitude cap has non-finite bounds, `min > max`, or `<= 0.0` |
+| `INPT-0003` | `InvalidAxisRange` | Axis clamp range or magnitude cap has non-finite bounds, excludes neutral `0.0` (`min > 0.0` or `max < 0.0`), or `<= 0.0` |
 | `INPT-0004` | `InvalidBinding` | Invalid trigger/source (e.g. `KeyCode::Unidentified` by `KeyCode`, non-finite/zero button scale, identical digital pair triggers, or binding capacity exceeded) |
 | `INPT-0005` | `IdOutOfRange` | `ActionId`, `AxisId`, or `ContextId` exceeds its bounded slot count |
 | `INPT-0006` | `InvalidCommand` | Untrusted `InputCommand` has non-finite/out-of-range axes, unregistered bits set, or impossible transition flags |
@@ -79,10 +79,10 @@ Turns raw device events into semantic input: device abstraction, per-frame/tick 
 **Sampling and reset contracts:**
 
 - **Tick-boundary sampling (`FND-FR-09`, `FND-INV-10`):** transitions (`pressed`, `released`) and transient pointer/scroll deltas accumulate across zero-tick frames and are consumed on the first `sample_tick` of a wakeup. Subsequent catch-up ticks in the same wakeup keep `held` and continuous button-driven axes active without duplicating press/release edges or motion/scroll deltas. Rapid sub-tick press+release sequences latch both `pressed` and `released` on that tick (`was_active() == true`, `held == false`).
-- **Pointer motion:** `DeviceState::pointer_delta` prefers unaccelerated relative motion (`InputState::handle_relative_motion(dx, dy)`, aligned with Phase 2b's `WindowEvent::PointerRelativeMotion { dx, dy }`) when received during the tick interval, falling back to surface cursor displacement (`PointerMoved`) so unlocked platforms delivering both never double-count motion. Non-input `WindowEvent` variants are ignored without panicking.
-- **Focus loss, close, disconnect, context, and rebind (`FND-INV-11`):** `WindowEvent::Focused(false)`, `WindowEvent::CloseRequested`, multi-window focus transfer, `WindowEvent::PointerLeft` (releases held pointer buttons), `InputState::release_held`, `InputState::disconnect_device`, disabling an active `ContextId`, or live-rebinding away from a held trigger transitions affected held states to `false` and latches `released = true` for the next tick. `InputState::reset` clears all live/pending/sampled state immediately while keeping `InputMap` and active contexts.
+- **Pointer motion:** `DeviceState::pointer_delta` prefers unaccelerated relative motion (`InputState::handle_relative_motion(dx, dy)`, aligned with Phase 2b's `WindowEvent::PointerRelativeMotion { dx, dy }`) when received during the tick interval, falling back to surface cursor displacement (`PointerMoved`) so unlocked platforms delivering both never double-count motion. Multi-window pointer focus (`pointer_window`) re-anchors across windows and ignores stale `PointerLeft` from unfocused windows. Non-input `WindowEvent` variants are ignored without panicking.
+- **Focus loss, close, disconnect, context, and rebind (`FND-INV-11`):** `WindowEvent::Focused(false)`, `WindowEvent::CloseRequested`, multi-window focus/pointer transfer, `WindowEvent::PointerLeft` (releases held pointer buttons on the active pointer window), `InputState::release_held`, `InputState::disconnect_device`, disabling an active `ContextId`, `InputState::set_map` (clearing bits absent from the new map's schema while releasing registered ones), or live-rebinding away from a held trigger transitions affected held states to `false` and latches `released = true` for the next tick. `InputState::reset` clears all live/pending/sampled state immediately while keeping `InputMap` and active contexts.
 
-**Tests (all headless, no window or GPU):** 12 unit tests (`error`: 3, `device`: 3, `action`: 4, `command`: 2), 12 verification/integration tests in `tests/input_verification.rs` (`FND-T03`: 5, `FND-T04`: 5, deterministic replay + command validation: 1, non-input events & extreme floats: 1), and 1 doc test.
+**Tests (all headless, no window or GPU):** 12 unit tests (`error`: 3, `device`: 3, `action`: 4, `command`: 2), 14 verification/integration tests in `tests/input_verification.rs` (`FND-T03`: 5, `FND-T04`: 6, deterministic replay + command validation: 1, `set_map` + unilateral axis range validation: 1, non-input events & extreme floats: 1), and 1 doc test.
 
 **Not implemented / deferred:**
 

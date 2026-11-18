@@ -364,15 +364,16 @@ impl AxisConfig {
         self
     }
 
-    /// Clamps the processed axis output to `[min, max]`.
+    /// Clamps the processed axis output to `[min, max]`, which must contain
+    /// neutral `0.0` (`min <= 0.0 <= max`).
     ///
     /// # Errors
     ///
     /// Returns [`InputErrorKind::InvalidAxisRange`] (`INPT-0003`) if `min` or
-    /// `max` is non-finite or `min > max`.
+    /// `max` is non-finite, `min > 0.0`, or `max < 0.0`.
     #[track_caller]
     pub fn with_range(mut self, min: f32, max: f32) -> Result<Self, InputError> {
-        if !min.is_finite() || !max.is_finite() || min > max {
+        if !min.is_finite() || !max.is_finite() || min > 0.0 || max < 0.0 {
             return Err(InputError::new(InputErrorKind::InvalidAxisRange)
                 .with_detail(format!("range = [{min}, {max}]")));
         }
@@ -863,6 +864,10 @@ impl InputMap {
         command.validate(&self.validation_rules())
     }
 
+    pub(crate) const fn registered_actions_mask(&self) -> u64 {
+        self.registered_actions
+    }
+
     /// Evaluates the bitmask of actions currently satisfied by at least one
     /// held binding in an active context (`active_contexts` bitmask).
     pub(crate) fn active_action_mask(&self, devices: &DeviceState, active_contexts: u16) -> u64 {
@@ -982,12 +987,28 @@ mod tests {
             assert_eq!(err.code(), "INPT-0002");
         }
 
+        // Valid zero-inclusive ranges (unilateral and degenerate zero) succeed.
+        assert_eq!(
+            AxisConfig::new().with_range(0.0, 1.0).unwrap().range(),
+            Some((0.0, 1.0))
+        );
+        assert_eq!(
+            AxisConfig::new().with_range(-1.0, 0.0).unwrap().range(),
+            Some((-1.0, 0.0))
+        );
+        assert_eq!(
+            AxisConfig::new().with_range(-0.0, 0.0).unwrap().range(),
+            Some((0.0, 0.0))
+        );
+
         for (min, max) in [
             (f32::NAN, 1.0),
             (-1.0, f32::NAN),
             (f32::NEG_INFINITY, 1.0),
             (-1.0, f32::INFINITY),
             (0.5, -0.5),
+            (0.5, 1.0),
+            (-1.0, -0.5),
         ] {
             let err = AxisConfig::new().with_range(min, max).unwrap_err();
             assert_eq!(err.kind(), InputErrorKind::InvalidAxisRange);

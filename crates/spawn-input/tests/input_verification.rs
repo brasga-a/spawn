@@ -843,3 +843,163 @@ fn non_input_window_events_and_extreme_floats_are_harmless() -> Result<(), Box<d
     assert_eq!(cmd.axis(scroll_y), 0.0);
     Ok(())
 }
+
+/// Replacing `InputMap` via `set_map` while actions are held or pending clears
+/// bits absent from the new map's schema while still emitting `released` for
+/// actions registered in the new map, keeping `map().validate_command(&cmd)`
+/// valid on the next tick. Also covers unilateral `[0.0, 1.0]` / `[-1.0, 0.0]`
+/// axis clamp ranges at rest and under load.
+#[test]
+fn set_map_preserves_command_validity_and_unilateral_ranges_validate() -> Result<(), Box<dyn Error>>
+{
+    let dropped_action = ActionId::new(0)?;
+    let kept_action = ActionId::new(1)?;
+    let positive_only = AxisId::new(0)?;
+    let negative_only = AxisId::new(1)?;
+
+    let mut old_map = InputMap::new();
+    old_map.bind_action(dropped_action, ButtonTrigger::Key(KeyCode::Q))?;
+    old_map.bind_action(kept_action, ButtonTrigger::Key(KeyCode::E))?;
+
+    let mut input = InputState::with_map(old_map);
+    input.handle_window_event(&key_event(KeyCode::Q, 16, ElementState::Pressed));
+    input.handle_window_event(&key_event(KeyCode::E, 18, ElementState::Pressed));
+    let cmd0 = input.sample_tick(Tick::ZERO);
+    assert!(cmd0.is_held(dropped_action));
+    assert!(cmd0.is_held(kept_action));
+
+    // Also latch a pending press on another unregistered action before swapping maps.
+    let transient_action = ActionId::new(2)?;
+    input.mutate_map(|m| m.bind_action(transient_action, ButtonTrigger::Key(KeyCode::R)))?;
+    input.handle_window_event(&key_event(KeyCode::R, 19, ElementState::Pressed));
+    input.handle_window_event(&key_event(KeyCode::R, 19, ElementState::Released));
+
+    // Build a new map that registers `kept_action` (unbound) and unilateral
+    // `[0.0, 1.0]` / `[-1.0, 0.0]` axes, omitting `dropped_action` and `transient_action`.
+    let mut new_map = InputMap::new();
+    new_map.register_action(kept_action);
+    new_map.bind_axis(
+        positive_only,
+        AxisSource::Button {
+            trigger: ButtonTrigger::Key(KeyCode::W),
+            scale: 1.0,
+        },
+    )?;
+    new_map.set_axis_config(positive_only, AxisConfig::new().with_range(0.0, 1.0)?);
+    new_map.bind_axis(
+        negative_only,
+        AxisSource::Button {
+            trigger: ButtonTrigger::Key(KeyCode::S),
+            scale: -1.0,
+        },
+    )?;
+    new_map.set_axis_config(negative_only, AxisConfig::new().with_range(-1.0, 0.0)?);
+
+    input.set_map(new_map);
+
+    let cmd1 = input.sample_tick(Tick::new(1));
+    // Must pass `new_map`'s strict schema validation!
+    input.map().validate_command(&cmd1)?;
+    assert_eq!(cmd1.action_state(dropped_action), ButtonState::UP);
+    assert_eq!(cmd1.action_state(transient_action), ButtonState::UP);
+    assert_eq!(
+        cmd1.action_state(kept_action),
+        ButtonState {
+            pressed: false,
+            held: false,
+            released: true,
+        }
+    );
+    assert_eq!(cmd1.axis(positive_only), 0.0);
+    assert_eq!(cmd1.axis(negative_only), 0.0);
+
+    // Activate both unilateral axes and verify clamping + validation.
+    input.handle_window_event(&key_event(KeyCode::W, 17, ElementState::Pressed));
+    input.handle_window_event(&key_event(KeyCode::S, 31, ElementState::Pressed));
+    let cmd2 = input.sample_tick(Tick::new(2));
+    input.map().validate_command(&cmd2)?;
+    assert_eq!(cmd2.axis(positive_only), 1.0);
+    assert_eq!(cmd2.axis(negative_only), -1.0);
+
+    Ok(())
+}
+
+/// Out-of-order multi-window pointer events (`win2` `PointerEntered` + button
+/// press before `win1` `PointerLeft`, or `PointerMoved` switching windows)
+/// never clobber the active pointer window's held buttons or compute a
+/// cross-window cursor delta.
+#[test]
+fn fnd_t04_multi_window_pointer_focus_isolates_cursor_and_buttons() -> Result<(), Box<dyn Error>> {
+    let click = ActionId::new(0)?;
+    let mut map = InputMap::new();
+    map.bind_action(click, ButtonTrigger::MouseButton(MouseButton::Left))?;
+    let mut input = InputState::with_map(map);
+
+    let win1 = WindowId::from_raw(1);
+    let win2 = WindowId::from_raw(2);
+
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::PointerEntered(PhysicalPosition::new(10.0, 20.0)),
+    });
+    assert_eq!(input.devices().pointer_window(), Some(win1));
+
+    // Out-of-order pointer transfer: win2 gets PointerEntered + button press
+    // BEFORE win1's stale PointerLeft arrives.
+    input.handle_event(&Event::Window {
+        window: win2,
+        event: WindowEvent::PointerEntered(PhysicalPosition::new(300.0, 400.0)),
+    });
+    input.handle_event(&Event::Window {
+        window: win2,
+        event: WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            state: ElementState::Pressed,
+        },
+    });
+    // Late stale PointerLeft and CloseRequested on win1 must NOT disturb win2!
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::PointerLeft,
+    });
+    input.handle_event(&Event::Window {
+        window: win2,
+        event: WindowEvent::Focused(true),
+    });
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::CloseRequested,
+    });
+
+    assert_eq!(input.devices().pointer_window(), Some(win2));
+    assert_eq!(
+        input.devices().cursor_position(),
+        Some(PhysicalPosition::new(300.0, 400.0))
+    );
+    let cmd0 = input.sample_tick(Tick::ZERO);
+    assert_eq!(
+        cmd0.action_state(click),
+        ButtonState {
+            pressed: true,
+            held: true,
+            released: false,
+        }
+    );
+    assert_eq!(input.devices().cursor_delta(), PointerDelta::ZERO);
+
+    // Synthetic PointerMoved directly on win1 without PointerEntered re-anchors
+    // rather than computing (50 - 300, 60 - 400) across windows.
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::PointerMoved(PhysicalPosition::new(50.0, 60.0)),
+    });
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::PointerMoved(PhysicalPosition::new(55.0, 64.0)),
+    });
+    let _ = input.sample_tick(Tick::new(1));
+    assert_eq!(input.devices().pointer_window(), Some(win1));
+    assert_eq!(input.devices().cursor_delta(), PointerDelta::new(5.0, 4.0));
+
+    Ok(())
+}

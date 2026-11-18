@@ -277,12 +277,13 @@ impl CommandValidation {
         self
     }
 
-    /// Permits `axis` and requires its value to lie within `[min, max]`.
+    /// Permits `axis` and requires its value to lie within `[min, max]`, which
+    /// must include neutral `0.0` (`min <= 0.0 <= max`).
     ///
     /// # Errors
     ///
     /// Returns [`InputErrorKind::InvalidAxisRange`] (`INPT-0003`) if `min` or
-    /// `max` is non-finite or `min > max`.
+    /// `max` is non-finite, `min > 0.0`, or `max < 0.0`.
     #[track_caller]
     pub fn allow_axis_with_range(
         mut self,
@@ -290,13 +291,15 @@ impl CommandValidation {
         min: f32,
         max: f32,
     ) -> Result<Self, InputError> {
-        if !min.is_finite() || !max.is_finite() || min > max {
+        if !min.is_finite() || !max.is_finite() || min > 0.0 || max < 0.0 {
             return Err(InputError::new(InputErrorKind::InvalidAxisRange)
                 .with_detail(format!("range = [{min}, {max}]")));
         }
+        let clean_min = if min == 0.0 { 0.0 } else { min };
+        let clean_max = if max == 0.0 { 0.0 } else { max };
         self.allowed_axes |= axis.bit();
         if let Some(slot) = self.axis_ranges.get_mut(usize::from(axis.index())) {
-            *slot = Some((min, max));
+            *slot = Some((clean_min, clean_max));
         }
         Ok(self)
     }
@@ -336,11 +339,24 @@ mod tests {
         let act0 = ActionId::new(0)?;
         let ax0 = AxisId::new(0)?;
         let ax1 = AxisId::new(1)?;
+        let ax3 = AxisId::new(3)?;
+        let ax4 = AxisId::new(4)?;
+
+        // Zero-excluding ranges are rejected on `CommandValidation` too.
+        for (min, max) in [(0.5, 1.0), (-1.0, -0.5), (1.0, -1.0), (f32::NAN, 1.0)] {
+            let err = CommandValidation::strict_empty()
+                .allow_axis_with_range(ax0, min, max)
+                .unwrap_err();
+            assert_eq!(err.kind(), InputErrorKind::InvalidAxisRange);
+            assert_eq!(err.code(), "INPT-0003");
+        }
 
         let rules = CommandValidation::strict_empty()
             .allow_action(act0)
             .allow_axis_with_range(ax0, -1.0, 1.0)?
             .allow_axis(ax1)
+            .allow_axis_with_range(ax3, 0.0, 1.0)?
+            .allow_axis_with_range(ax4, -1.0, 0.0)?
             .with_max_unclamped_magnitude(500.0)?;
 
         // Valid empty and valid active commands pass.

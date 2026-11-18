@@ -92,8 +92,9 @@ impl InputState {
     }
 
     /// Replaces the [`InputMap`], reconciling currently active actions so any
-    /// held action no longer satisfied by the new map latches a `released`
-    /// transition.
+    /// held action still registered in `map` that is no longer satisfied
+    /// latches a `released` transition, while actions absent from `map`'s
+    /// schema have their active and pending bits cleared.
     pub fn set_map(&mut self, map: InputMap) {
         self.map = map;
         self.reconcile_actions();
@@ -205,13 +206,15 @@ impl InputState {
     }
 
     fn reconcile_actions(&mut self) {
+        let registered = self.map.registered_actions_mask();
         let now_down = self
             .map
-            .active_action_mask(&self.devices, self.active_contexts);
+            .active_action_mask(&self.devices, self.active_contexts)
+            & registered;
         let newly_pressed = now_down & !self.action_down;
         let newly_released = self.action_down & !now_down;
-        self.pending_action_pressed |= newly_pressed;
-        self.pending_action_released |= newly_released;
+        self.pending_action_pressed = (self.pending_action_pressed | newly_pressed) & registered;
+        self.pending_action_released = (self.pending_action_released | newly_released) & registered;
         self.action_down = now_down;
     }
 }
