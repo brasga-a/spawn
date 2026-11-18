@@ -1,1 +1,8 @@
 /target
+# Generated SPIR-V and cooked shader artifacts are never committed (ADR-0014, SPN-INV-084).
+*.spv
+*.spnshdr
+/crates/spawn-render/fuzz/corpus
+/crates/spawn-render/fuzz/artifacts
+/crates/spawn-render/fuzz/target
+/crates/spawn-render/fuzz/Cargo.lock

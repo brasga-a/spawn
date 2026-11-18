@@ -52,14 +52,15 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Current Implementation Status
 
-`EXISTS` (foundation Phase 3: clear frame through Vulkan, Wayland surfaces only); shaders, pipelines, resources, memory allocator and everything else are `PLANNED`.
+`EXISTS` (foundation Phase 3: clear frame through Vulkan, Wayland surfaces only; Milestone 2 Phase 2: versioned cooked-shader binary contract and untrusted SPIR-V/reflection layout validator); GPU pipelines, resources, memory allocator and everything else are `PLANNED`.
 
-**Cargo features:** `default = []` (no dependencies; presentation policy, selection logic and public types compile and test without a GPU). `vulkan` adds `ash` 0.38 (`loaded`, `std`: `libvulkan.so.1` is loaded at runtime, so building needs no system packages) and `raw-window-handle`. Never depends on `spawn-platform` (`cargo tree -p spawn-render --features vulkan -e normal`).
+**Cargo features:** `default = []` (no normal dependencies; presentation policy, selection logic, cooked-shader binary codec/validator, and public types compile and test without a GPU; dev-dependencies `arbitrary`, `insta`, `proptest`). `vulkan` adds `ash` 0.38 (`loaded`, `std`: `libvulkan.so.1` is loaded at runtime, so building needs no system packages) and `raw-window-handle`. Never depends on `spawn-platform` (`cargo tree -p spawn-render --features vulkan -e normal`).
 
 | Item | Module | Availability | Notes |
 | --- | --- | --- | --- |
 | `SurfaceSize`, `ClearColor`, `RendererDescriptor`, `PresentModePreference`, `Validation` | `types` | always | Physical pixels; linear clear color, sanitized (non-finite → 0, clamped) and encoded per swapchain format |
 | `FrameOutcome`, `PresentationState`, `RendererInfo`, `GpuKind`, `ValidationMessage`, `ValidationSeverity` | `types` | always | Explicit presentation outcomes and diagnostics |
+| `CookedShader`, `ShaderStage`, `ShaderStageFlags`, `VertexFormat`, `VertexInputAttribute`, `DescriptorKind`, `DescriptorBinding`, `PushConstantRange`, `ShaderLayoutExpectation`, `PipelineLayoutDesc`, `validate_graphics_pipeline_shaders` | `shader` | always | `#![forbid(unsafe_code)]`, `#![deny(clippy::indexing_slicing)]`; versioned `SPNSHDR\0` binary format, pre-allocation bounds/alignment checks, SPIR-V header/`OpEntryPoint` check, and pipeline layout compatibility validator (ADR-0014, `SPN-INV-034`) |
 | `RenderError`, `RenderErrorKind` | `error` | always | Located, coded, detail, flattened cause, optional backtrace (ADR-0009) |
 | Presentation controller | `presentation` | always (crate-private) | Pure state machine: suspend, recreate, surface recovery, bounded retries, fatal stop |
 | Device and swapchain choices | `selection` | always (crate-private) | Pure: ADR-0004 requirement check with per-GPU rejection reasons, ranking, format/present-mode/image-count/extent choices |
@@ -79,6 +80,8 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 | `REND-0007` | `GpuTimeout` | A frame slot did not finish within 5 s. Fatal |
 | `REND-0008` | `ValidationUnavailable` | `Validation::Required` without the Khronos layer |
 | `REND-0009` | `RendererFailed` | Call after a fatal error (detail names the original code) |
+| `REND-0010` | `InvalidShaderArtifact` | Cooked shader payload is corrupt, truncated, unaligned, oversized, wrong version, or missing its SPIR-V `OpEntryPoint` |
+| `REND-0011` | `ShaderLayoutMismatch` | Cooked shader stage, vertex attributes, push constants, or descriptor bindings mismatch the pipeline layout |
 
 **Vulkan initialization and device selection:**
 
@@ -108,7 +111,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 **Tests:**
 
-- Headless, always run (CI): 35 unit tests without the feature: errors (2), types (4), presentation controller (18, including FND-T06 and FND-T07), selection (11). With `vulkan`: +2 (validation sink bounds, `VkFailure` classification).
+- Headless, always run (CI): 37 unit tests + 7 `shader_validation` integration/property/fuzz/`insta`-snapshot tests (`F3D-T07`) without the feature: errors (2), types (4), presentation controller (18, including FND-T06 and FND-T07), selection (11), shader codec (2), plus `tests/shader_validation.rs` (7) and standalone Gate G2 `cargo-fuzz` package `crates/spawn-render/fuzz` (`decode_cooked_shader`). With `vulkan`: +2 (validation sink bounds, `VkFailure` classification).
 - GPU, opt-in (`cargo test -p spawn-render --features vulkan -- --ignored`, needs a Vulkan 1.3 GPU with `VK_EXT_headless_surface`): 120 presented frames; present-mode preferences (`Fifo`, `Mailbox`, `Immediate`); resize to zero (suspended, no acquire) and back to four sizes with matching swapchain extents; start suspended and create/drop three times; each asserts zero validation errors. All 4 pass on the reference hardware with `VK_LAYER_KHRONOS_validation` 1.4.363 and `VK_EXT_validation_features` synchronization validation active.
 
 **Manual smoke test:** `examples/vulkan_clear.rs` in the root package (the composition root may depend on both `spawn-platform` and `spawn-render`; this crate must not); drains trailing validation messages on exit and returns a non-zero exit code on validation errors. Records: [VERIFICATION](../../docs/foundation/VERIFICATION.md#recorded-smoke-runs).
@@ -118,7 +121,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 - X11, Win32 and other surfaces (`REND-0002`); Windows is not claimed.
 - Separate graphics/present queue families (rejected with a reason), async compute, transfer queues.
 - Device-loss recovery (fatal by design for the foundation), HDR/wide-gamut color spaces, `VK_EXT_swapchain_maintenance1`.
-- GPU memory allocator, shaders, pipelines, render graph, debug names beyond swapchain/frame objects.
+- GPU memory allocator, Vulkan shader modules/pipelines, render graph, debug names beyond swapchain/frame objects.
 
 ## Agent Instructions
 
