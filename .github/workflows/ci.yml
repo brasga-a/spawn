@@ -26,6 +26,10 @@ jobs:
       - run: cargo clippy -p spawn-platform --features wayland --all-targets -- -D warnings
       - run: cargo test -p spawn-platform --features wayland
       - run: cargo doc -p spawn-platform --features wayland --no-deps
+      # The Vulkan loader is loaded at runtime; GPU tests are #[ignore] (no GPU).
+      - run: cargo clippy -p spawn-render --features vulkan --all-targets -- -D warnings
+      - run: cargo test -p spawn-render --features vulkan
+      - run: cargo doc -p spawn-render --features vulkan --no-deps
 
   windows:
     name: Windows (check, test)
@@ -34,6 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - run: cargo check --workspace --all-targets
+      - run: cargo check -p spawn-render --features vulkan --all-targets
       - run: cargo test --workspace
 
   deny:

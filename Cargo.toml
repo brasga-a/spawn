@@ -10,6 +10,7 @@ rust-version = "1.99.1"
 
 # Third-party crates (docs/DEPENDENCIES.md), pinned here and opted into per crate.
 [workspace.dependencies]
+ash = { version = "0.38.0", default-features = false }
 raw-window-handle = { version = "0.6.2", default-features = false }
 rustix = { version = "1.1.6", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
@@ -47,3 +48,14 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+
+# Manual smoke examples. The composition root is the only package that may
+# depend on both spawn-platform and spawn-render (SPN-INV-005, SPN-INV-006);
+# dev-dependencies keep them out of the `spawn-engine` binary itself.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+spawn-platform = { path = "crates/spawn-platform", features = ["wayland"] }
+spawn-render = { path = "crates/spawn-render", features = ["vulkan"] }
+
+[[example]]
+name = "vulkan_clear"
+path = "examples/vulkan_clear.rs"

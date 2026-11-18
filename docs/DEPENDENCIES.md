@@ -20,8 +20,8 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 | `wayland-protocols` | MIT | dep | `spawn-platform` | Wayland protocol extensions | [0001](adr/0001-in-house-platform-layer.md) | yes (`spawn-platform`, feature `wayland`) |
 | `x11rb` | MIT/Apache-2.0 | dep | `spawn-platform` | X11 protocol | [0001](adr/0001-in-house-platform-layer.md) | no |
 | `xkbcommon` | MIT | dep | `spawn-platform` | Linux keyboard keymaps | [0001](adr/0001-in-house-platform-layer.md) | no |
-| `raw-window-handle` | MIT/Apache-2.0/Zlib | dep | `spawn-platform`, `spawn-render` | Window handle contract | [0004](adr/0004-in-house-graphics-api.md) | yes (`spawn-platform`, feature `wayland`) |
-| `ash` | MIT/Apache-2.0 | dep | `spawn-render` | Vulkan bindings | [0004](adr/0004-in-house-graphics-api.md) | no |
+| `raw-window-handle` | MIT/Apache-2.0/Zlib | dep | `spawn-platform`, `spawn-render` | Window handle contract | [0004](adr/0004-in-house-graphics-api.md) | yes (`spawn-platform`, feature `wayland`; `spawn-render`, feature `vulkan`) |
+| `ash` | MIT/Apache-2.0 | dep | `spawn-render` | Vulkan bindings | [0004](adr/0004-in-house-graphics-api.md) | yes (`spawn-render`, feature `vulkan`; 0.38, `loaded` + `std`) |
 | `serde` | MIT/Apache-2.0 | dep | data-defining crates | Serialization framework | [0013](adr/0013-declarative-data-format.md) | no |
 | `ron` | MIT/Apache-2.0 | dep | data-defining crates | Authored data format | [0013](adr/0013-declarative-data-format.md) | no |
 | `mlua` (feature `luau`) | MIT | dep | `spawn-scripting` | Luau integration | [0017](adr/0017-luau-scripting-runtime.md) (proposed) | no |
