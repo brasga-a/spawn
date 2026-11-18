@@ -33,12 +33,12 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | no |
+| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | yes (`spawn-math` dev-dependency) |
 | `cargo-fuzz` | MIT/Apache-2.0 | test | parsers (packets, RON, glTF, cooked assets, packages) | Fuzzing | no |
 | `arbitrary` | MIT/Apache-2.0 | test | parsers | Structured fuzz inputs | no |
 | `loom` | MIT | test | `spawn-jobs`, lock-free code | Concurrency model checking | no |
 | `criterion` or `divan` (choose one) | MIT/Apache-2.0 | test | all crates | Benchmarks on the reference hardware | no |
-| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | no |
+| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | yes (`spawn-math` dev-dependency) |
 | `cargo-nextest` | MIT/Apache-2.0 | tool | CI, local | Faster test runner | no |
 
 ## Profiling and diagnostics
@@ -66,8 +66,8 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `libm` | MIT/Apache-2.0 | dep | `spawn-math` | Deterministic transcendental functions ([ADR-0010](adr/0010-math-library.md)) | no |
-| `glam` | MIT/Apache-2.0 | oracle | `spawn-math` tests | Compare math results | no |
+| `libm` | MIT/Apache-2.0 | dep | `spawn-math` | Deterministic transcendental functions ([ADR-0010](adr/0010-math-library.md)) | yes (`spawn-math`; `default-features = false`) |
+| `glam` | MIT/Apache-2.0 | oracle | `spawn-math` tests | Compare math results | yes (`spawn-math` dev-dependency) |
 | `crossbeam-deque` | MIT/Apache-2.0 | dep | `spawn-jobs` | Work-stealing deques ([ADR-0012](adr/0012-job-system.md)) | no |
 | `crossbeam-utils` | MIT/Apache-2.0 | dep | `spawn-jobs` | Cache padding, utilities | no |
 | `bytemuck` | MIT/Apache-2.0/Zlib | dep | `spawn-render`, `spawn-assets`, `spawn-math` | Safe plain-data byte casting | no |

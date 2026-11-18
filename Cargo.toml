@@ -11,6 +11,10 @@ rust-version = "1.99.1"
 # Third-party crates (docs/DEPENDENCIES.md), pinned here and opted into per crate.
 [workspace.dependencies]
 ash = { version = "0.38.0", default-features = false }
+glam = { version = "0.34.3", default-features = false }
+insta = { version = "1.49.0", default-features = false }
+libm = { version = "0.2.16", default-features = false }
+proptest = { version = "1.12.0", default-features = false }
 raw-window-handle = { version = "0.6.2", default-features = false }
 rustix = { version = "1.1.6", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
