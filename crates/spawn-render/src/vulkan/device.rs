@@ -328,5 +328,6 @@ fn renderer_info(
         api_version: decode_version(candidate.api_version),
         driver: driver.trim().to_owned(),
         validation_enabled: instance.validation_enabled(),
+        sync_validation_enabled: instance.sync_validation_enabled(),
     }
 }

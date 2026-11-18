@@ -21,6 +21,7 @@ struct BackingBlock {
     mapped: Option<NonNull<u8>>,
 }
 
+#[derive(Clone, Copy)]
 enum DeferredObject {
     Buffer(vk::Buffer),
     Image {
@@ -515,12 +516,13 @@ impl VulkanMemoryAllocator {
             unsafe { device.device.destroy_buffer(buffer.handle, None) };
             return self.free_now(device, buffer.suballocation);
         }
-        self.pure.retire(buffer.suballocation, last_used_timeline)?;
+        // Queue the owned `VkBuffer` even if the suballocation is rejected (stale or
+        // forged), so a bookkeeping error never leaks the Vulkan handle.
         self.retired_objects.push(RetiredVulkanObject {
             object: DeferredObject::Buffer(buffer.handle),
             last_used_timeline,
         });
-        Ok(())
+        self.pure.retire(buffer.suballocation, last_used_timeline)
     }
 
     /// Retires `image` (plus its `VkImageView` and suballocation) after `last_used_timeline`
@@ -542,7 +544,8 @@ impl VulkanMemoryAllocator {
             }
             return self.free_now(device, image.suballocation);
         }
-        self.pure.retire(image.suballocation, last_used_timeline)?;
+        // Queue the owned `VkImage`/`VkImageView` even if the suballocation is
+        // rejected (stale or forged), so a bookkeeping error never leaks handles.
         self.retired_objects.push(RetiredVulkanObject {
             object: DeferredObject::Image {
                 image: image.image,
@@ -550,7 +553,7 @@ impl VulkanMemoryAllocator {
             },
             last_used_timeline,
         });
-        Ok(())
+        self.pure.retire(image.suballocation, last_used_timeline)
     }
 
     /// Retires a `VkPipeline` and its `VkPipelineLayout` until `last_used_timeline` completes.
@@ -594,21 +597,26 @@ impl VulkanMemoryAllocator {
     /// `last_used_timeline <= completed_timeline`, destroying child handles
     /// strictly before freeing any dedicated `VkDeviceMemory` blocks.
     pub(crate) fn reclaim_completed(&mut self, device: &DeviceOwner, completed_timeline: u64) {
-        let mut remaining = Vec::with_capacity(self.retired_objects.len());
-        for entry in self.retired_objects.drain(..) {
-            if completed_timeline >= entry.last_used_timeline {
+        // In-place `retain` keeps the existing allocation (no per-frame `Vec`).
+        self.retired_objects.retain(|entry| {
+            let done = completed_timeline >= entry.last_used_timeline;
+            if done {
                 destroy_deferred_object(device, entry.object);
-            } else {
-                remaining.push(entry);
             }
-        }
-        self.retired_objects = remaining;
+            !done
+        });
 
         for freed_block_id in self.pure.reclaim_completed(completed_timeline) {
             if let Some(backing) = self.blocks.remove(&freed_block_id) {
                 free_backing_block(device, backing);
             }
         }
+    }
+
+    /// Number of Vulkan handles queued for timeline-gated destruction.
+    #[cfg(test)]
+    pub(crate) fn pending_retired_object_count(&self) -> usize {
+        self.retired_objects.len()
     }
 
     /// Drains all retired handles and frees all `VkDeviceMemory` blocks on shutdown.
@@ -626,10 +634,8 @@ impl VulkanMemoryAllocator {
         while let Some((_id, backing)) = self.blocks.pop_first() {
             free_backing_block(device, backing);
         }
-        debug_assert_eq!(
-            leaked, 0,
-            "VulkanMemoryAllocator::shutdown detected {leaked} leaked suballocation(s)"
-        );
+        // Leaks are reported to the caller and stay visible in `stats()`
+        // (`live_allocations`); never panic here, since this runs from `Drop`.
         leaked
     }
 }

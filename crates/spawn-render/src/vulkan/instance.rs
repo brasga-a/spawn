@@ -132,6 +132,8 @@ pub(crate) struct InstanceOwner {
     messenger: Option<Messenger>,
     /// Debug-utils is enabled (object names, validation messages).
     pub debug_utils: bool,
+    /// `VK_EXT_validation_features` synchronization validation was requested.
+    sync_validation: bool,
     sink: Box<ValidationSink>,
 }
 
@@ -202,6 +204,17 @@ impl InstanceOwner {
         let debug_utils = layer_available && has_extension(ext::debug_utils::NAME);
 
         let sync_validation = layer_available && validation_features_available(&entry);
+        // `Validation::Required` means errors are *observable* (debug-utils messenger)
+        // and synchronization validation is active (ADR-0004, SPN-INV-092), not
+        // merely that the layer is loaded.
+        if validation == Validation::Required && !(debug_utils && sync_validation) {
+            return Err(
+                RenderError::new(RenderErrorKind::ValidationUnavailable).with_detail(format!(
+                    "the Khronos validation layer is missing required support \
+                     (VK_EXT_debug_utils: {debug_utils}, VK_EXT_validation_features: {sync_validation})"
+                )),
+            );
+        }
         let mut extensions: Vec<*const c_char> =
             vec![ash::khr::surface::NAME.as_ptr(), surface.name().as_ptr()];
         if debug_utils {
@@ -253,6 +266,7 @@ impl InstanceOwner {
             instance,
             messenger: None,
             debug_utils,
+            sync_validation,
             sink: Box::default(),
         };
         if debug_utils {
@@ -287,6 +301,11 @@ impl InstanceOwner {
     /// Whether the validation layer is active.
     pub(crate) fn validation_enabled(&self) -> bool {
         self.messenger.is_some()
+    }
+
+    /// Whether synchronization validation is active alongside the validation layer.
+    pub(crate) fn sync_validation_enabled(&self) -> bool {
+        self.messenger.is_some() && self.sync_validation
     }
 
     pub(crate) fn sink(&self) -> &ValidationSink {
