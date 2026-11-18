@@ -160,13 +160,12 @@ impl Transform {
             (self.scale * r_c.y_axis) * child.scale.y,
             (self.scale * r_c.z_axis) * child.scale.z,
         );
-        let has_zero_scale = self.scale.x == 0.0
-            || self.scale.y == 0.0
-            || self.scale.z == 0.0
-            || child.scale.x == 0.0
-            || child.scale.y == 0.0
-            || child.scale.z == 0.0;
-        let (mid_rot, scale) = decompose_linear_trs(mid, child_rot, has_zero_scale)?;
+        let noise_eligible = (
+            col_is_parent_masked_trig_noise(self.scale, r_c.x_axis),
+            col_is_parent_masked_trig_noise(self.scale, r_c.y_axis),
+            col_is_parent_masked_trig_noise(self.scale, r_c.z_axis),
+        );
+        let (mid_rot, scale) = decompose_linear_trs(mid, child_rot, noise_eligible)?;
         let rotation = (parent_rot * mid_rot).try_normalize()?;
         let composed = Self {
             translation,
@@ -216,7 +215,7 @@ impl Transform {
             inv_scale * r_inv.y_axis,
             inv_scale * r_inv.z_axis,
         );
-        let (rotation, scale) = decompose_linear_trs(linear_inv, inv_rot, false)?;
+        let (rotation, scale) = decompose_linear_trs(linear_inv, inv_rot, (false, false, false))?;
         let inv = Self {
             translation: inv_translation,
             rotation,
@@ -260,6 +259,15 @@ impl Transform {
     }
 }
 
+/// Returns `true` if every surviving row of `rot_col` (where `parent_scale != 0`)
+/// is pure `f32` trig rounding noise (`<= TRIG_NOISE_COLUMN_REL_TOLERANCE`).
+#[inline]
+fn col_is_parent_masked_trig_noise(parent_scale: Vec3, rot_col: Vec3) -> bool {
+    (parent_scale.x == 0.0 || rot_col.x.abs() <= TRIG_NOISE_COLUMN_REL_TOLERANCE)
+        && (parent_scale.y == 0.0 || rot_col.y.abs() <= TRIG_NOISE_COLUMN_REL_TOLERANCE)
+        && (parent_scale.z == 0.0 || rot_col.z.abs() <= TRIG_NOISE_COLUMN_REL_TOLERANCE)
+}
+
 /// Decomposes a 3x3 linear matrix (`S * R` or `S_p * R_c * S_c`) into `(rotation, scale)`
 /// iff its non-zero columns are mutually orthogonal and reconstruct the linear matrix
 /// without shear.
@@ -267,7 +275,7 @@ impl Transform {
 fn decompose_linear_trs(
     linear: Mat3,
     zero_fallback_rot: Quat,
-    allow_zero_column_noise: bool,
+    noise_eligible: (bool, bool, bool),
 ) -> Option<(Quat, Vec3)> {
     if !linear.is_finite() {
         return None;
@@ -302,38 +310,28 @@ fn decompose_linear_trs(
         return Some(result);
     }
 
-    if !allow_zero_column_noise {
+    if !noise_eligible.0 && !noise_eligible.1 && !noise_eligible.2 {
         return None;
     }
 
     // `f32` trig rounding in 90° rotations (e.g. `cos(FRAC_PI_2) ≈ -4.37e-8`) can leave
     // residual ~1e-7 noise on an axis-collapsed column when an input scale has a zero.
+    // Only trim columns whose surviving rotation entries are themselves `<= 1e-6` AND whose
+    // scaled norm is `<= 1e-6 * max_len` so true sheared/oblique columns are never dropped.
     let max_len = l0.max(l1).max(l2);
     let noise_floor = max_len * TRIG_NOISE_COLUMN_REL_TOLERANCE;
     if noise_floor == 0.0 {
         return None;
     }
-    let trimmed = (l0 > 0.0 && l0 <= noise_floor)
-        || (l1 > 0.0 && l1 <= noise_floor)
-        || (l2 > 0.0 && l2 <= noise_floor);
-    if !trimmed {
+    let trim0 = noise_eligible.0 && l0 > 0.0 && l0 <= noise_floor;
+    let trim1 = noise_eligible.1 && l1 > 0.0 && l1 <= noise_floor;
+    let trim2 = noise_eligible.2 && l2 > 0.0 && l2 <= noise_floor;
+    if !trim0 && !trim1 && !trim2 {
         return None;
     }
-    let (l0_t, u0_t) = if l0 <= noise_floor {
-        (0.0, None)
-    } else {
-        (l0, u0)
-    };
-    let (l1_t, u1_t) = if l1 <= noise_floor {
-        (0.0, None)
-    } else {
-        (l1, u1)
-    };
-    let (l2_t, u2_t) = if l2 <= noise_floor {
-        (0.0, None)
-    } else {
-        (l2, u2)
-    };
+    let (l0_t, u0_t) = if trim0 { (0.0, None) } else { (l0, u0) };
+    let (l1_t, u1_t) = if trim1 { (0.0, None) } else { (l1, u1) };
+    let (l2_t, u2_t) = if trim2 { (0.0, None) } else { (l2, u2) };
     decompose_normalized_cols(l0_t, l1_t, l2_t, u0_t, u1_t, u2_t, zero_fallback_rot)
 }
 
@@ -701,6 +699,34 @@ mod tests {
         assert_eq!(
             Transform::from_scale(Vec3::new(0.0, 1.0, 1.0))
                 .try_mul_transform(Transform::from_rotation(Quat::from_rotation_z(FRAC_PI_4))),
+            None
+        );
+
+        // Zero-scale with large orthogonal axis: oblique rotation is sheared -> None,
+        // while 90° rotation with trig-noise collapsed column still succeeds cleanly.
+        assert_eq!(
+            Transform::from_scale(Vec3::new(1.0, 1.0e7, 0.0))
+                .try_mul_transform(Transform::from_rotation(Quat::from_rotation_y(0.3))),
+            None
+        );
+        assert_eq!(
+            Transform::from_scale(Vec3::new(1.0, 1.0, 0.0)).try_mul_transform(Transform::new(
+                Vec3::ZERO,
+                Quat::from_rotation_y(0.3),
+                Vec3::new(1.0e-7, 1.0, 1.0),
+            )),
+            None
+        );
+        assert_mul_matches_mat4(
+            Transform::from_scale(Vec3::new(1.0, 1.0e7, 0.0)),
+            Transform::from_rotation(Quat::from_rotation_y(FRAC_PI_2)),
+        );
+        assert_eq!(
+            Transform::from_scale(Vec3::new(1.0e7, 1.0, 0.0)).try_mul_transform(Transform::new(
+                Vec3::ZERO,
+                Quat::from_rotation_y(FRAC_PI_2),
+                Vec3::new(1.0, 1.0, 1.0e-7),
+            )),
             None
         );
 
