@@ -1,0 +1,8 @@
+---
+source: crates/spawn-math/src/error.rs
+expression: normalized
+---
+error[MATH-0003]: clip plane distances must be finite with 0 < near (and near < far for finite projections)
+  --> crates/spawn-math/src/error.rs:<LINE>:<COL>
+   = detail: near = 10.0, far = 2.0
+caused by: camera config parse failed: negative near clip distance
