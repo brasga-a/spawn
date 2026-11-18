@@ -577,6 +577,17 @@ impl DeviceState {
                     self.cursor_anchor_valid = true;
                 }
             }
+            WindowEvent::PointerRelativeMotion { dx, dy } => {
+                if window.is_none()
+                    || self.pointer_window.is_none()
+                    || self.pointer_window == window
+                {
+                    if self.pointer_window.is_none() && window.is_some() {
+                        self.pointer_window = window;
+                    }
+                    self.handle_relative_motion(*dx, *dy);
+                }
+            }
             WindowEvent::PointerButton { button, state } => {
                 if window.is_none()
                     || self.pointer_window.is_none()
@@ -607,13 +618,12 @@ impl DeviceState {
                 }
             },
             // Non-input window events (`Resized`, `ScaleFactorChanged`,
-            // `Occluded`) and future `#[non_exhaustive]` variants (such as
-            // Phase 2b's `CursorGrabChanged`; `PointerRelativeMotion { dx, dy }`
-            // wires into `handle_relative_motion` once Phase 2b merges) are
-            // ignored without panicking.
+            // `Occluded`, `CursorGrabChanged`) and future `#[non_exhaustive]`
+            // variants are ignored without panicking.
             WindowEvent::Resized(_)
             | WindowEvent::ScaleFactorChanged { .. }
             | WindowEvent::Occluded(_)
+            | WindowEvent::CursorGrabChanged(_)
             | _ => {}
         }
     }

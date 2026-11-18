@@ -151,9 +151,9 @@ impl InputState {
     }
 
     /// Records unaccelerated relative pointer motion (`dx` positive right, `dy`
-    /// positive down), matching Phase 2b's
-    /// `WindowEvent::PointerRelativeMotion { dx, dy }`. Non-finite components
-    /// are ignored without poisoning accumulated deltas.
+    /// positive down), equivalent to feeding
+    /// [`WindowEvent::PointerRelativeMotion`]. Non-finite components are
+    /// ignored without poisoning accumulated deltas.
     pub fn handle_relative_motion(&mut self, dx: f64, dy: f64) {
         self.devices.handle_relative_motion(dx, dy);
     }

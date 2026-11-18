@@ -1003,3 +1003,96 @@ fn fnd_t04_multi_window_pointer_focus_isolates_cursor_and_buttons() -> Result<()
 
     Ok(())
 }
+
+/// Phase 2b -> Phase 4 end-to-end integration: `Event::Window` carrying
+/// `WindowEvent::PointerRelativeMotion { dx, dy }` and
+/// `WindowEvent::CursorGrabChanged` drives semantic look axes, prefers
+/// unaccelerated relative deltas over `PointerMoved` displacement when both
+/// arrive in the same tick, does not duplicate across catch-up ticks, and
+/// isolates relative motion to the active `pointer_window`.
+#[test]
+fn phase_2b_pointer_relative_motion_events_drive_axes_end_to_end() -> Result<(), Box<dyn Error>> {
+    use spawn_platform::CursorGrabMode;
+
+    let look_x = AxisId::new(0)?;
+    let look_y = AxisId::new(1)?;
+    let mut map = InputMap::new();
+    map.bind_axis(look_x, AxisSource::PointerMotion(MotionAxis::X))?;
+    map.set_axis_config(look_x, AxisConfig::new().with_sensitivity(0.5)?);
+    map.bind_axis(look_y, AxisSource::PointerMotion(MotionAxis::Y))?;
+    map.set_axis_config(
+        look_y,
+        AxisConfig::new().with_sensitivity(0.5)?.with_inverted(true),
+    );
+
+    let mut input = InputState::with_map(map);
+    let win1 = WindowId::from_raw(1);
+    let win2 = WindowId::from_raw(2);
+
+    // Unlocked/confined coexistence: both PointerMoved and PointerRelativeMotion
+    // arrive before tick 0; pointer_delta uses unaccelerated relative motion
+    // without double-counting surface displacement.
+    input.handle_events(&[
+        Event::Window {
+            window: win1,
+            event: WindowEvent::PointerEntered(PhysicalPosition::new(100.0, 100.0)),
+        },
+        Event::Window {
+            window: win1,
+            event: WindowEvent::PointerMoved(PhysicalPosition::new(130.0, 120.0)),
+        },
+        Event::Window {
+            window: win1,
+            event: WindowEvent::PointerRelativeMotion { dx: 10.0, dy: -4.0 },
+        },
+        Event::Window {
+            window: win1,
+            event: WindowEvent::CursorGrabChanged(CursorGrabMode::Locked),
+        },
+        Event::Window {
+            window: win1,
+            event: WindowEvent::PointerRelativeMotion { dx: 6.0, dy: -2.0 },
+        },
+        // Stale relative motion from another window is ignored.
+        Event::Window {
+            window: win2,
+            event: WindowEvent::PointerRelativeMotion {
+                dx: 500.0,
+                dy: 500.0,
+            },
+        },
+    ]);
+
+    // Total relative delta on win1: dx = 16.0, dy = -6.0.
+    // With sensitivity 0.5 (and inverted Y): look_x = 8.0, look_y = 3.0.
+    let cmd0 = input.sample_tick(Tick::ZERO);
+    input.map().validate_command(&cmd0)?;
+    assert_eq!(
+        input.devices().relative_delta(),
+        PointerDelta::new(16.0, -6.0)
+    );
+    assert_eq!(
+        input.devices().pointer_delta(),
+        PointerDelta::new(16.0, -6.0)
+    );
+    assert_eq!(cmd0.axis(look_x), 8.0);
+    assert_eq!(cmd0.axis(look_y), 3.0);
+
+    // Catch-up tick with no new events does not duplicate relative delta.
+    let cmd1 = input.sample_tick(Tick::new(1));
+    input.map().validate_command(&cmd1)?;
+    assert_eq!(input.devices().pointer_delta(), PointerDelta::ZERO);
+    assert_eq!(cmd1.axis(look_x), 0.0);
+    assert_eq!(cmd1.axis(look_y), 0.0);
+
+    // Unlock notification is harmless.
+    input.handle_event(&Event::Window {
+        window: win1,
+        event: WindowEvent::CursorGrabChanged(CursorGrabMode::None),
+    });
+    let cmd2 = input.sample_tick(Tick::new(2));
+    input.map().validate_command(&cmd2)?;
+    assert_eq!(cmd2.axis(look_x), 0.0);
+
+    Ok(())
+}
