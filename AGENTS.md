@@ -63,7 +63,7 @@ Integration layer: `mlua` with the `luau` feature (`PLANNED`; not a dependency).
 
 ## Workspace
 
-Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version`, `edition` (2024), `license` (MIT) and `rust-version` (1.99.1), inherited by every member; `[workspace.lints]` (ADR-0007) is inherited by every member through `[lints] workspace = true`; dev profile uses `opt-level = 1` (dependencies `opt-level = 3`). No `[workspace.dependencies]` exist yet. **Every package currently has zero dependencies** (including inter-crate), so no actual dependency edges exist; all edges in nested documents are `PLANNED`.
+Root `Cargo.toml` (verified): `resolver = "3"`, members `.`, `crates/*`, `tools/*`; `[workspace.package]` provides `version`, `edition` (2024), `license` (MIT) and `rust-version` (1.99.1), inherited by every member; `[workspace.lints]` (ADR-0007) is inherited by every member through `[lints] workspace = true`; dev profile uses `opt-level = 1` (dependencies `opt-level = 3`). `[workspace.dependencies]` pins `raw-window-handle`, `rustix`, `wayland-client` and `wayland-protocols`, used only by `spawn-platform` behind its optional `wayland` feature; with default features **every package has zero dependencies**. No inter-crate (`spawn-*` → `spawn-*`) dependency edge exists; all such edges in nested documents are `PLANNED`.
 
 Conventions:
 - One crate per subsystem with a narrow public API; names `spawn-<subsystem>`.
@@ -87,7 +87,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-assets](crates/spawn-assets/AGENTS.md) | Asset identity, loading, caching, dependencies, hot reload | SCAFFOLD |
 | [spawn-io](crates/spawn-io/AGENTS.md) | Filesystem/stream/byte-level resource access | SCAFFOLD |
 | [spawn-reflect](crates/spawn-reflect/AGENTS.md) | Runtime type metadata for serialization, editor, script exposure | SCAFFOLD |
-| [spawn-platform](crates/spawn-platform/AGENTS.md) | OS integration: windows, system events, surfaces | SCAFFOLD |
+| [spawn-platform](crates/spawn-platform/AGENTS.md) | OS integration: windows, system events, surfaces | EXISTS (raw events; Wayland backend); X11, Win32 PLANNED |
 | [spawn-input](crates/spawn-input/AGENTS.md) | Input devices, state, actions, mappings | SCAFFOLD |
 | [spawn-render](crates/spawn-render/AGENTS.md) | GPU abstraction, resources, shaders, materials, frame execution | SCAFFOLD |
 | [spawn-physics](crates/spawn-physics/AGENTS.md) | Rigid-body simulation, collision, spatial queries | SCAFFOLD |
@@ -102,7 +102,7 @@ Intended layering (`PLANNED`, non-binding until code exists): foundations (math,
 | [spawn-editor](tools/spawn-editor/AGENTS.md) | Graphical authoring tools | SCAFFOLD |
 | [spawn-mcp](tools/spawn-mcp/AGENTS.md) | MCP server for external AI agents/tools | SCAFFOLD |
 
-Verified state: `spawn-core` contains the fixed-step clock (`FixedStepClock`, `FixedStepConfig`, `FixedStepUpdate`, `Tick`, `ClockError`) with unit, verification (FND-T01, FND-T02) and doc tests; every other `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
+Verified state: `spawn-core` contains the fixed-step clock (`FixedStepClock`, `FixedStepConfig`, `FixedStepUpdate`, `Tick`, `ClockError`) with unit, verification (FND-T01, FND-T02) and doc tests; `spawn-platform` contains the raw event types, `WindowDescriptor` and `PlatformError` (always compiled) and, behind the `wayland` feature, the Wayland backend (`Platform`, `Window`, `PumpMode`) with headless translation tests (FND-T05, FND-T10 platform part) and a manual smoke example; every other `lib.rs` contains only a crate-level doc comment (no items, no tests); `src/main.rs` prints a placeholder message.
 
 Ownership rule: each piece of state has exactly one owning system; others use its API. If a responsibility seems to fit two crates, stop and report rather than duplicate it.
 

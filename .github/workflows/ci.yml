@@ -21,6 +21,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo doc --workspace --no-deps
+      # Native backends are off by default (ADR-0002); they dlopen their system
+      # libraries, so the runner needs no extra packages.
+      - run: cargo clippy -p spawn-platform --features wayland --all-targets -- -D warnings
+      - run: cargo test -p spawn-platform --features wayland
+      - run: cargo doc -p spawn-platform --features wayland --no-deps
 
   windows:
     name: Windows (check, test)
