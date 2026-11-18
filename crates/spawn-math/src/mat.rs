@@ -531,10 +531,13 @@ impl Mat4 {
         )
     }
 
-    /// Decomposes an affine `T * R * S` matrix into `(scale, rotation, translation)`.
+    /// Decomposes a shear-free affine `T * R * S` matrix into `(scale, rotation, translation)`.
+    ///
+    /// Negative-determinant reflections absorb `det.signum()` into `scale.x` so `rotation`
+    /// remains a right-handed `SO(3)` unit quaternion.
     ///
     /// Returns `None` if `self` is non-finite, projective (`row(3) != (0, 0, 0, 1)`),
-    /// or singular (`det == 0`).
+    /// singular (`det == 0`), or sheared (columns are not mutually orthogonal).
     #[inline]
     pub fn try_to_scale_rotation_translation(&self) -> Option<(Vec3, Quat, Vec3)> {
         if !self.is_finite() {
@@ -547,26 +550,31 @@ impl Mat4 {
         {
             return None;
         }
-        let det = self.to_mat3().determinant();
-        if det == 0.0 || !det.is_finite() {
+        let c0 = self.x_axis.xyz();
+        let c1 = self.y_axis.xyz();
+        let c2 = self.z_axis.xyz();
+        let lx = c0.length();
+        let ly = c1.length();
+        let lz = c2.length();
+        if lx == 0.0
+            || ly == 0.0
+            || lz == 0.0
+            || !lx.is_finite()
+            || !ly.is_finite()
+            || !lz.is_finite()
+        {
             return None;
         }
-        let sx = self.x_axis.xyz().length() * det.signum();
-        let sy = self.y_axis.xyz().length();
-        let sz = self.z_axis.xyz().length();
-        if sx == 0.0 || sy == 0.0 || sz == 0.0 {
+        let u0 = c0.try_normalize()?;
+        let u1 = c1.try_normalize()?;
+        let u2 = c2.try_normalize()?;
+        let unit_det = Mat3::from_cols(u0, u1, u2).determinant();
+        if unit_det == 0.0 || !unit_det.is_finite() {
             return None;
         }
-        let scale = Vec3::new(sx, sy, sz);
-        let inv_scale = Vec3::new(1.0 / sx, 1.0 / sy, 1.0 / sz);
-        if !inv_scale.is_finite() {
-            return None;
-        }
-        let rot_mat = Mat3::from_cols(
-            self.x_axis.xyz() * inv_scale.x,
-            self.y_axis.xyz() * inv_scale.y,
-            self.z_axis.xyz() * inv_scale.z,
-        );
+        let sign = unit_det.signum();
+        let scale = Vec3::new(lx * sign, ly, lz);
+        let rot_mat = Mat3::from_cols(u0 * sign, u1, u2);
         let rotation = Quat::try_from_mat3(rot_mat)?;
         let translation = self.w_axis.xyz();
         Some((scale, rotation, translation))

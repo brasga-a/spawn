@@ -20,6 +20,8 @@ use std::ops::{Mul, MulAssign, Neg};
 use crate::{Mat3, Vec3, Vec4};
 
 const NORMALIZED_QUAT_LEN_SQ_TOLERANCE: f32 = 2.0e-4;
+const SO3_ORTHONORMAL_TOLERANCE: f32 = 1.0e-4;
+const SO3_RECONSTRUCTION_TOLERANCE: f32 = 2.5e-4;
 
 /// Single-precision quaternion `(x, y, z, w)`.
 ///
@@ -225,24 +227,44 @@ impl Quat {
         Self::try_from_rotation_arc(from, to).unwrap_or(Self::IDENTITY)
     }
 
-    /// Extracts a unit quaternion from a pure rotation [`Mat3`] using Shepperd's 4-branch method
-    /// (numerically stable across all angles including `180°` rotations where `trace == -1`).
+    /// Extracts a unit quaternion from a right-handed orthonormal rotation [`Mat3`] (`SO(3)`)
+    /// using Shepperd's 4-branch method (numerically stable across all angles including `180°`
+    /// rotations where `trace == -1`).
     ///
-    /// Returns `None` if `mat` is non-finite or has non-positive determinant.
+    /// Returns `None` if `mat` is non-finite, has non-unit columns, has non-orthogonal columns
+    /// (shear), has non-positive determinant (singular or reflection), or fails reconstruction.
     #[inline]
     pub fn try_from_mat3(mat: Mat3) -> Option<Self> {
-        if !mat.is_finite() || mat.determinant() <= 0.0 {
+        if !mat.is_finite() {
             return None;
         }
-        let c0r0 = mat.x_axis.x;
-        let c0r1 = mat.x_axis.y;
-        let c0r2 = mat.x_axis.z;
-        let c1r0 = mat.y_axis.x;
-        let c1r1 = mat.y_axis.y;
-        let c1r2 = mat.y_axis.z;
-        let c2r0 = mat.z_axis.x;
-        let c2r1 = mat.z_axis.y;
-        let c2r2 = mat.z_axis.z;
+        let c0 = mat.x_axis;
+        let c1 = mat.y_axis;
+        let c2 = mat.z_axis;
+        if (c0.length_squared() - 1.0).abs() > SO3_ORTHONORMAL_TOLERANCE
+            || (c1.length_squared() - 1.0).abs() > SO3_ORTHONORMAL_TOLERANCE
+            || (c2.length_squared() - 1.0).abs() > SO3_ORTHONORMAL_TOLERANCE
+        {
+            return None;
+        }
+        if c0.dot(c1).abs() > SO3_ORTHONORMAL_TOLERANCE
+            || c0.dot(c2).abs() > SO3_ORTHONORMAL_TOLERANCE
+            || c1.dot(c2).abs() > SO3_ORTHONORMAL_TOLERANCE
+        {
+            return None;
+        }
+        if mat.determinant() <= 0.0 {
+            return None;
+        }
+        let c0r0 = c0.x;
+        let c0r1 = c0.y;
+        let c0r2 = c0.z;
+        let c1r0 = c1.x;
+        let c1r1 = c1.y;
+        let c1r2 = c1.z;
+        let c2r0 = c2.x;
+        let c2r1 = c2.y;
+        let c2r2 = c2.z;
 
         let trace = c0r0 + c1r1 + c2r2;
         let raw = if trace > 0.0 {
@@ -291,7 +313,10 @@ impl Quat {
                 (c0r1 - c1r0) * inv_s,
             )
         };
-        raw.try_normalize()
+        let q = raw.try_normalize()?;
+        Mat3::from_quat(q)
+            .abs_diff_eq(&mat, SO3_RECONSTRUCTION_TOLERANCE)
+            .then_some(q)
     }
 
     /// 4D quaternion dot product `x1*x2 + y1*y2 + z1*z2 + w1*w2`.

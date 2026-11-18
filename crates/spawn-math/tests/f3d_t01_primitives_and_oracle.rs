@@ -354,6 +354,180 @@ fn f3d_t01_geometry_primitives_and_located_errors() {
     assert!((sheared.to_mat4() * inv_m4).abs_diff_eq(&Mat4::IDENTITY, 1.0e-5));
 }
 
+#[test]
+fn f3d_t01_trs_shear_rejection_composition_and_negative_scale_roundtrip() {
+    // 1. Sheared Mat3 / Mat4 torture cases with det == 1 (upper triangular, lower triangular,
+    //    subtle off-diagonal shear, and symmetric hyperbolic squeeze where off-diagonal skew is zero).
+    let hyp_a = 0.35_f32;
+    let sheared_m3_cases = [
+        // Upper triangular shear (`det = 1`): columns `(1, 0, 0)`, `(1, 1, 0)`, `(0, 0, 1)`.
+        Mat3::from_cols(Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Z),
+        // Upper triangular 3D shear (`det = 1`).
+        Mat3::from_cols(Vec3::X, Vec3::new(0.4, 1.0, 0.0), Vec3::new(-0.3, 0.7, 1.0)),
+        // Lower triangular shear (`det = 1`).
+        Mat3::from_cols(Vec3::new(1.0, 1.0, 0.0), Vec3::Y, Vec3::Z),
+        Mat3::from_cols(
+            Vec3::new(1.0, -0.5, 0.25),
+            Vec3::new(0.0, 1.0, 0.6),
+            Vec3::Z,
+        ),
+        // Subtle shear just above SO(3) orthogonality tolerance (`det = 1`).
+        Mat3::from_cols(Vec3::X, Vec3::new(1.0e-3, 1.0, 0.0), Vec3::Z),
+        // Symmetric hyperbolic squeeze (`det = cosh^2(a) - sinh^2(a) == 1`).
+        Mat3::from_cols(
+            Vec3::new(hyp_a.cosh(), hyp_a.sinh(), 0.0),
+            Vec3::new(hyp_a.sinh(), hyp_a.cosh(), 0.0),
+            Vec3::Z,
+        ),
+    ];
+    for m3 in sheared_m3_cases {
+        assert!(
+            (m3.determinant() - 1.0).abs() <= 1.0e-5,
+            "expected det ≈ 1 for {m3:?}"
+        );
+        assert_eq!(
+            Quat::try_from_mat3(m3),
+            None,
+            "Quat::try_from_mat3 must reject sheared Mat3 {m3:?}"
+        );
+        let m4 = Mat4::from_cols(
+            m3.x_axis.extend(0.0),
+            m3.y_axis.extend(0.0),
+            m3.z_axis.extend(0.0),
+            Vec4::new(3.0, -2.0, 5.0, 1.0),
+        );
+        assert_eq!(
+            m4.try_to_scale_rotation_translation(),
+            None,
+            "Mat4::try_to_scale_rotation_translation must reject sheared Mat4 {m4:?}"
+        );
+        assert_eq!(
+            Transform::try_from_mat4(m4),
+            None,
+            "Transform::try_from_mat4 must reject sheared Mat4 {m4:?}"
+        );
+    }
+
+    // 2. Non-unit columns & improper reflections (`det < 0`) in `Quat::try_from_mat3`.
+    for non_so3 in [
+        Mat3::from_scale(Vec3::splat(2.0)),
+        Mat3::from_scale(Vec3::new(2.0, 0.5, 1.0)),
+        Mat3::from_scale(Vec3::new(1.001, 1.0, 1.0)),
+        Mat3::from_scale(Vec3::new(-1.0, 1.0, 1.0)),
+        Mat3::from_scale(Vec3::splat(-1.0)),
+    ] {
+        assert_eq!(
+            Quat::try_from_mat3(non_so3),
+            None,
+            "Quat::try_from_mat3 must reject non-SO(3) Mat3 {non_so3:?}"
+        );
+    }
+
+    // 3. `Transform::try_mul_transform` & `mul_mat4`:
+    //    Non-uniform parent scale + rotated child rejects TRS composition (`None`), while `mul_mat4`
+    //    preserves exact sheared composition and `try_from_mat4` rejects the sheared product!
+    let parent_non_uniform = Transform::new(
+        Vec3::new(4.0, -2.0, 1.5),
+        Quat::from_yaw_pitch(0.4, -0.25),
+        Vec3::new(2.5, 0.5, 1.25),
+    );
+    let child_rotated = Transform::new(
+        Vec3::new(-1.0, 3.0, 2.0),
+        Quat::from_yaw_pitch_roll(-0.6, 0.5, 0.3),
+        Vec3::new(0.75, 1.5, 2.0),
+    );
+    assert_eq!(parent_non_uniform.try_mul_transform(child_rotated), None);
+    let composed_sheared_m4 = parent_non_uniform.mul_mat4(child_rotated);
+    assert_eq!(
+        composed_sheared_m4,
+        parent_non_uniform.to_mat4() * child_rotated.to_mat4()
+    );
+    assert_eq!(
+        composed_sheared_m4.try_to_scale_rotation_translation(),
+        None
+    );
+    assert_eq!(Transform::try_from_mat4(composed_sheared_m4), None);
+
+    let test_pt = Vec3::new(1.25, -0.75, 2.5);
+    assert!(composed_sheared_m4.transform_point3(test_pt).abs_diff_eq(
+        parent_non_uniform.transform_point3(child_rotated.transform_point3(test_pt)),
+        1.0e-4
+    ));
+
+    // Uniform parent scale (positive and negative) + rotated child succeeds and matches `mul_mat4`.
+    for uniform_scale in [2.5_f32, -1.75_f32] {
+        let parent_uniform = Transform::new(
+            Vec3::new(4.0, -2.0, 1.5),
+            Quat::from_yaw_pitch(0.4, -0.25),
+            Vec3::splat(uniform_scale),
+        );
+        let composed = parent_uniform
+            .try_mul_transform(child_rotated)
+            .expect("uniform parent scale composition must succeed");
+        assert!(
+            composed
+                .to_mat4()
+                .abs_diff_eq(&parent_uniform.mul_mat4(child_rotated), 1.0e-5)
+        );
+    }
+
+    // Non-uniform parent scale + identity child rotation (`IDENTITY` and `-IDENTITY`) succeeds!
+    for id_rot in [Quat::IDENTITY, -Quat::IDENTITY] {
+        let child_id_rot = Transform::new(
+            Vec3::new(-1.0, 3.0, 2.0),
+            id_rot,
+            Vec3::new(0.75, -1.5, 2.0),
+        );
+        let composed = parent_non_uniform
+            .try_mul_transform(child_id_rot)
+            .expect("identity child rotation composition must succeed");
+        assert!(
+            composed
+                .to_mat4()
+                .abs_diff_eq(&parent_non_uniform.mul_mat4(child_id_rot), 1.0e-5)
+        );
+    }
+
+    // Degenerate / non-finite transforms return `None` from `try_mul_transform`.
+    let zero_rot_transform =
+        Transform::new(Vec3::ZERO, Quat::from_xyzw(0.0, 0.0, 0.0, 0.0), Vec3::ONE);
+    let nan_transform = Transform::new(Vec3::NAN, Quat::IDENTITY, Vec3::ONE);
+    assert_eq!(
+        Transform::IDENTITY.try_mul_transform(zero_rot_transform),
+        None
+    );
+    assert_eq!(
+        zero_rot_transform.try_mul_transform(Transform::IDENTITY),
+        None
+    );
+    assert_eq!(Transform::IDENTITY.try_mul_transform(nan_transform), None);
+
+    // 4. Valid negative-scale shear-free TRS `to_mat4()` -> `try_from_mat4()` round-trip across all
+    //    7 negative-axis sign combinations (including odd reflections where `sx` absorbs `det.signum()`).
+    let base_rot = Quat::from_yaw_pitch_roll(0.65, -0.4, 0.3);
+    let base_trans = Vec3::new(-5.5, 8.25, -12.0);
+    for neg_scale in [
+        Vec3::new(-2.0, 1.5, 0.75),
+        Vec3::new(2.0, -1.5, 0.75),
+        Vec3::new(2.0, 1.5, -0.75),
+        Vec3::new(-2.0, -1.5, 0.75),
+        Vec3::new(-2.0, 1.5, -0.75),
+        Vec3::new(2.0, -1.5, -0.75),
+        Vec3::new(-2.0, -1.5, -0.75),
+    ] {
+        let original = Transform::new(base_trans, base_rot, neg_scale);
+        let original_m4 = original.to_mat4();
+        let recovered = Transform::try_from_mat4(original_m4)
+            .unwrap_or_else(|| panic!("expected valid negative-scale TRS for {neg_scale:?}"));
+        assert!(recovered.rotation.is_normalized());
+        assert!(
+            recovered.to_mat4().abs_diff_eq(&original_m4, 1.0e-5),
+            "reconstructed to_mat4() mismatch for {neg_scale:?}: got {:?}, expected {original_m4:?}",
+            recovered.to_mat4()
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(proptest_cfg())]
 
@@ -535,5 +709,71 @@ proptest! {
         let gm3 = to_glam_mat3(m3);
         prop_assert!((m3.determinant() - gm3.determinant()).abs() <= 1.0e-3);
         prop_assert!(m3.inverse().unwrap().abs_diff_eq(&from_glam_mat3(gm3.inverse()), 5.0e-4));
+    }
+
+    #[test]
+    fn f3d_t01_prop_transform_composition_shear_and_negative_scale_roundtrip(
+        p_tx in -50.0_f32..50.0,
+        p_ty in -50.0_f32..50.0,
+        p_tz in -50.0_f32..50.0,
+        c_tx in -50.0_f32..50.0,
+        c_ty in -50.0_f32..50.0,
+        c_tz in -50.0_f32..50.0,
+        p_yaw in -PI..PI,
+        p_pitch in -1.4_f32..1.4,
+        c_yaw in 0.15_f32..1.35,
+        c_pitch in 0.15_f32..1.25,
+        uniform_mag in 0.25_f32..4.0,
+        uniform_neg in any::<bool>(),
+        sx in 1.5_f32..3.5,
+        sy in 0.25_f32..0.9,
+        sz in 0.4_f32..2.5,
+        csx in 0.25_f32..3.0,
+        csy in 0.25_f32..3.0,
+        csz in 0.25_f32..3.0,
+        neg_x in any::<bool>(),
+        neg_y in any::<bool>(),
+        neg_z in any::<bool>(),
+    ) {
+        let p_trans = Vec3::new(p_tx, p_ty, p_tz);
+        let c_trans = Vec3::new(c_tx, c_ty, c_tz);
+        let p_rot = Quat::from_yaw_pitch(p_yaw, p_pitch);
+        let c_rot = Quat::from_yaw_pitch(c_yaw, c_pitch);
+        let c_scale = Vec3::new(csx, csy, csz);
+
+        // 1. Uniform parent scale (positive or negative) + rotated child -> exact `Some(t)`.
+        let signed_uniform = if uniform_neg { -uniform_mag } else { uniform_mag };
+        let parent_uniform = Transform::new(p_trans, p_rot, Vec3::splat(signed_uniform));
+        let child_rot_t = Transform::new(c_trans, c_rot, c_scale);
+        let composed_u = parent_uniform.try_mul_transform(child_rot_t).unwrap();
+        let expected_u_m4 = parent_uniform.mul_mat4(child_rot_t);
+        prop_assert!(composed_u.to_mat4().abs_diff_eq(&expected_u_m4, 1.0e-3));
+
+        // 2. Non-uniform parent scale + identity child rotation -> exact `Some(t)`.
+        let non_uniform_s = Vec3::new(sx, sy, sz);
+        let parent_non_uniform = Transform::new(p_trans, p_rot, non_uniform_s);
+        let child_id_t = Transform::new(c_trans, Quat::IDENTITY, c_scale);
+        let composed_id = parent_non_uniform.try_mul_transform(child_id_t).unwrap();
+        let expected_id_m4 = parent_non_uniform.mul_mat4(child_id_t);
+        prop_assert!(composed_id.to_mat4().abs_diff_eq(&expected_id_m4, 1.0e-3));
+
+        // 3. Non-uniform parent scale (`sx >= 1.5 > 0.9 >= sy`) + oblique child rotation
+        //    (`c_yaw, c_pitch` strictly away from 90° axis permutations) -> `None` everywhere!
+        prop_assert_eq!(parent_non_uniform.try_mul_transform(child_rot_t), None);
+        let sheared_m4 = parent_non_uniform.mul_mat4(child_rot_t);
+        prop_assert_eq!(sheared_m4.try_to_scale_rotation_translation(), None);
+        prop_assert_eq!(Transform::try_from_mat4(sheared_m4), None);
+
+        // 4. Signed / negative-scale shear-free TRS round-trip (`to_mat4` -> `try_from_mat4` -> `to_mat4`).
+        let signed_scale = Vec3::new(
+            if neg_x { -sx } else { sx },
+            if neg_y { -sy } else { sy },
+            if neg_z { -sz } else { sz },
+        );
+        let signed_trs = Transform::new(p_trans, p_rot, signed_scale);
+        let signed_m4 = signed_trs.to_mat4();
+        let recovered = Transform::try_from_mat4(signed_m4).unwrap();
+        prop_assert!(recovered.rotation.is_normalized());
+        prop_assert!(recovered.to_mat4().abs_diff_eq(&signed_m4, 1.0e-3));
     }
 }

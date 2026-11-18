@@ -6,6 +6,7 @@
 use crate::{Mat3, Mat4, Quat, Vec3};
 
 const UNIFORM_SCALE_TOLERANCE: f32 = 1.0e-5;
+const IDENTITY_ROTATION_TOLERANCE: f32 = 1.0e-5;
 
 /// Local 3D translation-rotation-scale transform (`f32`).
 ///
@@ -92,6 +93,8 @@ impl Transform {
     }
 
     /// Attempts to decompose a shear-free affine [`Mat4`] into a `Transform`.
+    ///
+    /// Returns `None` if `mat` is non-finite, projective, singular, or sheared.
     #[inline]
     pub fn try_from_mat4(mat: Mat4) -> Option<Self> {
         let (scale, rotation, translation) = mat.try_to_scale_rotation_translation()?;
@@ -120,21 +123,45 @@ impl Transform {
         self.rotation.mul_vec3(self.scale * vector)
     }
 
-    /// Composes `self` (parent) with `child` into a `Transform`.
-    ///
-    /// Exact whenever `self.scale` is uniform (`x == y == z`) or `child.rotation` is identity.
-    /// When combining arbitrary non-uniform parent scale with rotated children (which introduces
-    /// shear), multiply [`Self::to_mat4`] matrices instead.
+    /// Exact 4x4 composition `self.to_mat4() * child.to_mat4()`, supporting arbitrary
+    /// non-uniform parent scales and rotated children (which may introduce shear).
     #[inline]
-    pub fn mul_transform(self, child: Self) -> Self {
-        let translation = self.transform_point3(child.translation);
-        let rotation = (self.rotation * child.rotation).normalize_or_identity();
+    pub fn mul_mat4(self, child: Self) -> Mat4 {
+        self.to_mat4() * child.to_mat4()
+    }
+
+    /// Shear-free `Transform` composition (`self` parent followed by `child`) when both transforms
+    /// are finite with valid rotations and either `self.scale` is uniform (`|sx - sy| <= 1e-5` and
+    /// `|sy - sz| <= 1e-5`) or `child.rotation` is identity.
+    ///
+    /// Returns `None` if either transform is non-finite, has a zero/degenerate quaternion,
+    /// overflows `f32`, or would introduce shear (`S_parent * R_child` cannot be represented as
+    /// `R' * S'` when `self.scale` is non-uniform and `child.rotation` is non-identity; use
+    /// [`Self::mul_mat4`] for general composition).
+    #[inline]
+    pub fn try_mul_transform(self, child: Self) -> Option<Self> {
+        if !self.is_finite() || !child.is_finite() {
+            return None;
+        }
+        let parent_rot = self.rotation.try_normalize()?;
+        let child_rot = child.rotation.try_normalize()?;
+        let is_uniform_parent_scale = (self.scale.x - self.scale.y).abs()
+            <= UNIFORM_SCALE_TOLERANCE
+            && (self.scale.y - self.scale.z).abs() <= UNIFORM_SCALE_TOLERANCE;
+        let is_identity_child_rot =
+            child_rot.angle_between(Quat::IDENTITY) <= IDENTITY_ROTATION_TOLERANCE;
+        if !is_uniform_parent_scale && !is_identity_child_rot {
+            return None;
+        }
+        let translation = parent_rot.mul_vec3(self.scale * child.translation) + self.translation;
+        let rotation = (parent_rot * child_rot).try_normalize()?;
         let scale = self.scale * child.scale;
-        Self {
+        let composed = Self {
             translation,
             rotation,
             scale,
-        }
+        };
+        composed.is_finite().then_some(composed)
     }
 
     /// Exact 4x4 inverse of `self.to_mat4()`, supporting arbitrary invertible non-uniform scales
@@ -165,7 +192,7 @@ impl Transform {
         let rot = self.rotation.try_normalize()?;
         let is_uniform = (self.scale.x - self.scale.y).abs() <= UNIFORM_SCALE_TOLERANCE
             && (self.scale.y - self.scale.z).abs() <= UNIFORM_SCALE_TOLERANCE;
-        let is_identity_rot = rot.angle_between(Quat::IDENTITY) <= 1.0e-5;
+        let is_identity_rot = rot.angle_between(Quat::IDENTITY) <= IDENTITY_ROTATION_TOLERANCE;
         if !is_uniform && !is_identity_rot {
             return None;
         }
