@@ -8,7 +8,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Responsibilities
 
-- GPU device/queue/surface management and resource lifetime (in-house graphics API over Vulkan as a private module, accepted in [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md); `wgpu` is a design reference, not a dependency). The clear-frame path `EXISTS` behind the `vulkan` feature; everything else is `PLANNED`.
+- GPU device/queue/surface management, in-house block memory suballocation, and timeline-gated resource lifetime (in-house graphics API over Vulkan as a private module, accepted in [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md); `wgpu` is a design reference, not a dependency). Clear-frame presentation, GPU block suballocation, swapchain-matched `D32_SFLOAT` reversed-Z depth attachments, `dynamicRendering` graphics pipelines, unindexed triangle draws, and offscreen RGBA8 readback `EXISTS` behind the `vulkan` feature; static 3D mesh/index uploads, camera-relative draws, render graphs, and materials are `PLANNED`.
 - Shaders, materials, pipelines, render graph/passes, camera/view abstraction, mesh/texture GPU resources.
 - Extraction of renderable state from simulation into presentation state (simulation never touches GPU).
 - Debug draw primitives if a feature requires them.
@@ -21,7 +21,7 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Architectural Boundaries
 
-- May depend on `spawn-math`, `spawn-assets`, and a window handle (per [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md), accepted: through `raw-window-handle` traits, without depending on `spawn-platform`); must not depend on `spawn-physics`, `spawn-network`, `spawn-scripting`, or tools.
+- May depend on `spawn-math`, `spawn-assets`, and a window handle (per [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md), accepted: through `raw-window-handle` traits, without depending on `spawn-platform`); must not depend on `spawn-physics`, `spawn-network`, `spawn-scripting`, or tools. (`spawn-math` edge is `PLANNED` for Milestone 2 Phase 4; currently zero `spawn-*` dependencies.)
 - `spawn-ui` and `spawn-editor` integrate through render-facing contracts, not by reaching into GPU internals.
 - Server/headless builds must not require this crate.
 
@@ -29,43 +29,48 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 - Hide the graphics backend; no Vulkan, `ash` or RHI-internal types in public APIs.
 - The only third-party types accepted at the public boundary are the `raw-window-handle` traits/handles needed to create a surface from a window (SPN-INV-011); keep that surface minimal.
-- Resources are referenced by handles; frame data is plain data.
+- Resources are referenced by generational handles (`ShaderHandle`, `PipelineHandle`, `OffscreenTargetHandle`); frame data is plain data.
 
 ## Internal Design Principles
 
-- Separate render world/state from simulation state; keep GPU code behind thin layers so logic (sorting, culling, batching) is headless-testable.
-- `unsafe` confined and justified.
+- Separate render world/state from simulation state; keep GPU code behind thin layers so logic (allocator bookkeeping, depth/presentation lifecycles, device selection, shader validation) is headless-testable.
+- `#![forbid(unsafe_code)]` in every module outside `src/vulkan/`; `unsafe` confined strictly to `src/vulkan/` with `// SAFETY:` comments.
 
 ## Performance and Safety
 
-- Frame-time budgets, minimized state changes and allocations per frame, explicit GPU memory accounting; shader/asset inputs are untrusted — validate, never panic on device loss or bad shaders.
+- Frame-time budgets, minimized state changes and allocations per frame, explicit GPU memory accounting; shader/asset inputs and resource handles are untrusted — validate before Vulkan object creation, never panic on device loss, bad shaders, or stale handles.
 
 ## Testing Requirements
 
-- Headless unit tests for CPU-side logic; golden-image tests only if a headless adapter is available; benchmarks for frame extraction and culling.
+- Headless unit/property tests for CPU-side logic; opt-in GPU offscreen-readback and headless-surface tests when a Vulkan 1.3 adapter is available; benchmarks for frame extraction and culling.
 
 ## Governing Decisions
 
-- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (caller-driven presentation cadence, simulation/presentation separation), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions), [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (caller-driven presentation cadence, simulation/presentation separation), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API and in-house GPU memory allocator), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions, reversed-Z, single-site Y-flip), [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
 - **Proposed (not binding yet; do not implement contrary designs):** [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
 - **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `ash`, `raw-window-handle`, `bytemuck`, `renderdoc` (behind a feature), `gpu-allocator` (fallback only). Any other crate needs owner approval first.
 
 ## Current Implementation Status
 
-`EXISTS` (foundation Phase 3: clear frame through Vulkan, Wayland surfaces only; Milestone 2 Phase 2: versioned cooked-shader binary contract and untrusted SPIR-V/reflection layout validator); GPU pipelines, resources, memory allocator and everything else are `PLANNED`.
+`EXISTS` (foundation Phase 3: clear frame through Vulkan, Wayland + headless surfaces; Milestone 2 Phase 2: versioned cooked-shader binary contract and untrusted SPIR-V/reflection layout validator; Milestone 2 Phase 3: in-house GPU block suballocator + timeline retirement, swapchain-matched `D32_SFLOAT` reversed-Z depth attachment, generational handles, Vulkan 1.3 `dynamicRendering` graphics pipelines, colored triangle draws, and offscreen RGBA8 readback); 3D mesh/index staging, camera-relative draws, render graph, and materials are `PLANNED`.
 
-**Cargo features:** `default = []` (no normal dependencies; presentation policy, selection logic, cooked-shader binary codec/validator, and public types compile and test without a GPU; dev-dependencies `arbitrary`, `insta`, `proptest`). `vulkan` adds `ash` 0.38 (`loaded`, `std`: `libvulkan.so.1` is loaded at runtime, so building needs no system packages) and `raw-window-handle`. Never depends on `spawn-platform` (`cargo tree -p spawn-render --features vulkan -e normal`).
+**Cargo features:** `default = []` (zero normal dependencies; `#![forbid(unsafe_code)]`; presentation policy, depth lifecycle policy, device selection, GPU block suballocator bookkeeping, generational handle pool, cooked-shader binary codec/validator, and public types compile and test without a GPU; dev-dependencies `arbitrary`, `insta`, `proptest`). `vulkan` adds `ash` 0.38 (`loaded`, `std`: `libvulkan.so.1` is loaded at runtime, so building needs no system packages) and `raw-window-handle`. Never depends on `spawn-platform` (`cargo tree -p spawn-render --features vulkan -e normal`).
 
 | Item | Module | Availability | Notes |
 | --- | --- | --- | --- |
 | `SurfaceSize`, `ClearColor`, `RendererDescriptor`, `PresentModePreference`, `Validation` | `types` | always | Physical pixels; linear clear color, sanitized (non-finite → 0, clamped) and encoded per swapchain format |
 | `FrameOutcome`, `PresentationState`, `RendererInfo`, `GpuKind`, `ValidationMessage`, `ValidationSeverity` | `types` | always | Explicit presentation outcomes and diagnostics |
-| `CookedShader`, `ShaderStage`, `ShaderStageFlags`, `VertexFormat`, `VertexInputAttribute`, `DescriptorKind`, `DescriptorBinding`, `PushConstantRange`, `ShaderLayoutExpectation`, `PipelineLayoutDesc`, `validate_graphics_pipeline_shaders` | `shader` | always | `#![forbid(unsafe_code)]`, `#![deny(clippy::indexing_slicing)]`; versioned `SPNSHDR\0` binary format, pre-allocation bounds/alignment checks, SPIR-V header/`OpEntryPoint` check, and pipeline layout compatibility validator (ADR-0014, `SPN-INV-034`) |
-| `RenderError`, `RenderErrorKind` | `error` | always | Located, coded, detail, flattened cause, optional backtrace (ADR-0009) |
+| `PipelineTarget`, `FrontFace`, `CullMode`, `GraphicsPipelineDescriptor`, `OffscreenReadback` | `types` | always | Reversed-Z, CCW front-face, backface-culled `dynamicRendering` pipeline config and host RGBA8 readback |
+| `GpuMemoryBudget`, `GpuAllocatorStats`, `DEFAULT_*_BYTES` | `allocator` | always | Configurable `DEVICE_LOCAL` / `HOST_VISIBLE` budgets, block sizes, and live/retired/peak accounting |
+| `PureGpuAllocator` | `allocator` | always (crate-private) | `#![forbid(unsafe_code)]`, `#![deny(clippy::indexing_slicing)]`; fixed-size block suballocation, dedicated oversized fallback, `bufferImageGranularity` page separation, free-range coalescing, timeline retirement (`F3D-T08`) |
+| `REVERSED_Z_CLEAR_DEPTH`, `DepthAttachmentController` | `depth` | `REVERSED_Z_CLEAR_DEPTH` public; controller crate-private (always) | `#![forbid(unsafe_code)]`; swapchain-matched `D32_SFLOAT` lifecycle (`0.0` clear, never allocates `0x0`, idempotent extent sync; `F3D-T09`) |
+| `ShaderHandle`, `PipelineHandle`, `OffscreenTargetHandle`, `GenerationalPool` | `handle` | handles public; pool crate-private (always) | `#![forbid(unsafe_code)]`, `#![deny(clippy::indexing_slicing)]`; stale/forged/foreign handles return `REND-0013` (`SPN-INV-035`) |
+| `CookedShader`, `ShaderStage`, `ShaderStageFlags`, `VertexFormat`, `VertexInputAttribute`, `DescriptorKind`, `DescriptorBinding`, `PushConstantRange`, `ShaderLayoutExpectation`, `PipelineLayoutDesc`, `validate_graphics_pipeline_shaders` | `shader` | always | `#![forbid(unsafe_code)]`, `#![deny(clippy::indexing_slicing)]`; versioned `SPNSHDR\0` binary format (`from_bytes` / `decode`), pre-allocation bounds/alignment checks, SPIR-V header/`OpEntryPoint` check, and pipeline layout compatibility validator (ADR-0014, `SPN-INV-034`) |
+| `RenderError`, `RenderErrorKind` | `error` | always | Located, coded (`REND-0001..0014`), detail, flattened cause, optional backtrace (ADR-0009) |
 | Presentation controller | `presentation` | always (crate-private) | Pure state machine: suspend, recreate, surface recovery, bounded retries, fatal stop |
-| Device and swapchain choices | `selection` | always (crate-private) | Pure: ADR-0004 requirement check with per-GPU rejection reasons, ranking, format/present-mode/image-count/extent choices |
-| `Renderer<'window>` | `renderer` | `vulkan` | Public API: `new(&window, size, &descriptor)`, `resize`, `render_clear`, `state`, `info`, `drain_validation_messages`, `validation_error_count`. Borrows the window for its lifetime; not `Send`/`Sync` |
-| Vulkan RHI | `vulkan/` (`instance`, `surface`, `device`, `swapchain`, `frame`, `mod`) | `vulkan` | Only place with `ash` types and `unsafe`; every block has a `// SAFETY:` comment |
+| Device and swapchain choices | `selection` | always (crate-private) | Pure: ADR-0004 + `D32_SFLOAT` depth + push-constant/vertex-input limit check with per-GPU rejection reasons, ranking, format/present-mode/image-count/extent choices |
+| `Renderer<'window>` | `renderer` | `vulkan` | Public API: `new`, `new_with_budget`, `new_headless`, `new_headless_with_budget`, `resize`, `load_shader`, `load_shader_named`, `destroy_shader`, `create_graphics_pipeline`, `destroy_pipeline`, `create_offscreen_target`, `destroy_offscreen_target`, `render_clear`, `render_triangle`, `render_offscreen_triangle`, `state`, `info`, `allocator_stats`, `wait_idle_and_reclaim`, `close`, `drain_validation_messages`, `validation_error_count`. Borrows the window for its lifetime; not `Send`/`Sync` |
+| Vulkan RHI | `vulkan/` (`instance`, `surface`, `device`, `swapchain`, `memory`, `pipeline`, `frame`, `mod`) | `vulkan` | Only place with `ash` types and `unsafe`; every block has a `// SAFETY:` comment |
 
 **Error codes:**
 
@@ -73,62 +78,47 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 | --- | --- | --- |
 | `REND-0001` | `VulkanUnavailable` | No loader, loader below 1.3, or no driver (ICD) providing `VK_KHR_surface` |
 | `REND-0002` | `UnsupportedWindowSystem` | Window/display handle not Wayland, unavailable, or no driver provides its surface extension |
-| `REND-0003` | `NoSuitableDevice` | No GPU meets ADR-0004; the detail lists every GPU with all its missing requirements |
+| `REND-0003` | `NoSuitableDevice` | No GPU meets ADR-0004 and Milestone 2 limits; the detail lists every GPU with all its missing requirements |
 | `REND-0004` | `VulkanCallFailed` | A Vulkan call failed (detail: call; cause: `VkResult`). Fatal after initialization |
 | `REND-0005` | `DeviceLost` | `VK_ERROR_DEVICE_LOST`. Fatal; no device recovery |
 | `REND-0006` | `SurfaceRecoveryFailed` | Bounded swapchain/surface recovery exhausted. Fatal |
-| `REND-0007` | `GpuTimeout` | A frame slot did not finish within 5 s. Fatal |
+| `REND-0007` | `GpuTimeout` | A frame slot or timeline wait did not finish within 5 s. Fatal |
 | `REND-0008` | `ValidationUnavailable` | `Validation::Required` without the Khronos layer |
-| `REND-0009` | `RendererFailed` | Call after a fatal error (detail names the original code) |
+| `REND-0009` | `RendererFailed` | Call after a fatal error or explicit `close` (detail names the original code) |
 | `REND-0010` | `InvalidShaderArtifact` | Cooked shader payload is corrupt, truncated, unaligned, oversized, wrong version, or missing its SPIR-V `OpEntryPoint` |
 | `REND-0011` | `ShaderLayoutMismatch` | Cooked shader stage, vertex attributes, push constants, or descriptor bindings mismatch the pipeline layout |
+| `REND-0012` | `GpuMemoryExhausted` | GPU block suballocation, memory-type selection, or `vkAllocateMemory` failed or exceeded `GpuMemoryBudget` |
+| `REND-0013` | `InvalidResourceHandle` | Generational resource handle (`ShaderHandle`, `PipelineHandle`, `OffscreenTargetHandle`) is stale, destroyed, or forged |
+| `REND-0014` | `InvalidResourceDescriptor` | Invalid pipeline or render-target descriptor (e.g. `0x0` offscreen extent, stride/attribute mismatch, or target-format mismatch) |
 
-**Vulkan initialization and device selection:**
+**Vulkan initialization, memory, depth and pipeline execution:**
 
-- Instance: Vulkan 1.3; extensions `VK_KHR_surface` + `VK_KHR_wayland_surface` only, plus `VK_EXT_debug_utils` and `VK_EXT_validation_features` (synchronization validation) when the validation layer is active. `Validation` default: `IfAvailable` with debug assertions, `Disabled` otherwise. Loader/instance setup and teardown (`Entry::load`, pre-instance enumeration, `vkCreateInstance`, `vkDestroyInstance`, `dlclose`) are serialized across threads (`LOADER_LOCK`, cold path only) so concurrent `Renderer` creation/drop cannot race inside non-thread-safe ICD global initialization.
-- Device requirements (ADR-0004, checked per GPU from the actual feature bits): API ≥ 1.3; `VK_KHR_swapchain`; `dynamicRendering`, `synchronization2`, `timelineSemaphore`, `descriptorIndexing`, `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`, `descriptorBindingVariableDescriptorCount`, `shaderSampledImageArrayNonUniformIndexing`, `descriptorBindingSampledImageUpdateAfterBind`, `descriptorBindingStorageBufferUpdateAfterBind`; one queue family with graphics and presentation; at least one surface format and present mode. All listed features are enabled at device creation. Device limits are not checked beyond the surface's image extent limits (no consumer yet).
-- Ranking: discrete > integrated > virtual > CPU, then enumeration order; no vendor preference.
-- One queue (graphics + present). No transfer or compute queues.
+- Instance: Vulkan 1.3; extensions `VK_KHR_surface` + `VK_KHR_wayland_surface` (or `VK_EXT_headless_surface` for `Renderer::new_headless`), plus `VK_EXT_debug_utils` and `VK_EXT_validation_features` (synchronization validation) when the validation layer is active. Loader/instance setup and teardown are serialized across threads (`LOADER_LOCK`, cold path only).
+- Device requirements (ADR-0004 + Milestone 2): API ≥ 1.3; `VK_KHR_swapchain`; `dynamicRendering`, `synchronization2`, `timelineSemaphore`, `descriptorIndexing`, `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`, `descriptorBindingVariableDescriptorCount`, `shaderSampledImageArrayNonUniformIndexing`, `descriptorBindingSampledImageUpdateAfterBind`, `descriptorBindingStorageBufferUpdateAfterBind`; optimal-tiling `VK_FORMAT_D32_SFLOAT` with `DEPTH_STENCIL_ATTACHMENT`; `maxPushConstantsSize >= 128`, `maxVertexInputAttributes >= 3`, `maxVertexInputBindings >= 1`, `maxVertexInputBindingStride >= 40`; one queue family with graphics and presentation; at least one surface format and present mode.
+- GPU memory suballocator (`PureGpuAllocator` + `VulkanMemoryAllocator`): suballocates `16 MiB` `DEVICE_LOCAL` blocks and persistently mapped `4 MiB` `HOST_VISIBLE | HOST_COHERENT` blocks (configurable via `GpuMemoryBudget`) with dedicated-block fallback for oversized requests, exact `bufferImageGranularity` page isolation between linear (`VkBuffer`) and optimal (`VkImage`) suballocations, deterministic adjacent free-range coalescing, and timeline-semaphore-gated retirement of both Vulkan child handles and suballocations before `vkFreeMemory`.
+- Swapchain and `D32_SFLOAT` reversed-Z depth: swapchain requests `VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT` only (`SPN-INV-092`) paired with a `DEVICE_LOCAL` `VK_FORMAT_D32_SFLOAT` depth image/view matching the active swapchain `VkExtent2D` (never allocated at `0x0` when `Suspended`, retired/recreated idempotently across resize and surface recovery). Per-frame `synchronization2` barriers transition color (`UNDEFINED → COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR`) and depth (`UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL` across `EARLY_FRAGMENT_TESTS | LATE_FRAGMENT_TESTS`, cleared to `0.0`).
+- Dynamic-rendering pipelines & offscreen readback: `CookedShader::from_bytes` and `validate_graphics_pipeline_shaders` run before `vkCreateShaderModule` (`SPN-INV-034`). Pipelines use `VkPipelineRenderingCreateInfo` (zero `VkRenderPass`/`VkFramebuffer`), `TRIANGLE_LIST`, `VK_FRONT_FACE_COUNTER_CLOCKWISE`, `VK_CULL_MODE_BACK_BIT`, reversed-Z `VK_COMPARE_OP_GREATER_OR_EQUAL`, and positive-height `[0.0, 1.0]` `VkViewport`. Offscreen readback renders into a dedicated `DEVICE_LOCAL` `VK_FORMAT_R8G8B8A8_UNORM` (`COLOR_ATTACHMENT | TRANSFER_SRC`) + `D32_SFLOAT` target and copies via `vkCmdCopyImageToBuffer2` (`COPY → HOST_READ` barrier) into a suballocated `HOST_VISIBLE | HOST_COHERENT` buffer. Memory blocks, buffers, depth/offscreen images, views, shader modules, pipeline layouts, and pipelines carry `VK_EXT_debug_utils` names when active.
 
-**Swapchain and synchronization:**
-
-- Format: `B8G8R8A8_SRGB`/`R8G8B8A8_SRGB` in `SRGB_NONLINEAR` (GPU encodes), else 8-bit UNORM (CPU encodes the clear color), else the first format. Present mode: preference (`Fifo` default, `Mailbox`, `Immediate`) with FIFO fallback. Images: min + 1 within max. Usage: color attachment only. Composite alpha: opaque when supported.
-- Two frames in flight. One timeline semaphore counts submissions; a frame slot is reused only after the timeline reaches its last value (5 s limit → `REND-0007`). Per slot: transient command pool, one command buffer, one binary acquire semaphore. Per swapchain image: one binary present semaphore.
-- Commands: synchronization2 barrier `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, dynamic rendering with `LOAD_OP_CLEAR`, barrier to `PRESENT_SRC_KHR` (`dstStageMask = NONE`); `vkQueueSubmit2` waits the acquire semaphore at color-attachment output and signals both the present semaphore and the timeline at `ALL_COMMANDS` (ordering presentation after the layout transition).
-- No memory allocation: swapchain images are the only images (the in-house allocator of ADR-0004 waits for its first consumer).
-
-**Resize, suspension and recovery** (presentation controller):
-
-- `resize(size)` only records the size (idempotent for unchanged sizes, even when the surface clamps or dictates a different swapchain extent). Zero → `Suspended`: no acquire, no present, `render_clear` returns `FrameOutcome::Suspended` (the caller should wait for events). A different non-zero size → swapchain recreated at the next frame, once, for the last size.
-- A surface reporting a zero current extent also suspends until the next non-zero `resize`.
-- `VK_ERROR_OUT_OF_DATE_KHR` (acquire or present) → frame `Skipped`, recreation next frame. `VK_SUBOPTIMAL_KHR` → frame presented, recreation next frame. `VK_TIMEOUT`/`VK_NOT_READY` (100 ms acquire timeout) → `Skipped`, no recovery. `VK_ERROR_SURFACE_LOST_KHR` → surface recreated from the stored handles, then the swapchain.
-- Bounds: 3 consecutive failed recreations, or 16 consecutive recoveries without a presented frame → `REND-0006` (fatal). At most one recreation and one acquire per `render_clear` call, so no call spins.
-- Device lost and other unexpected failures → fatal; later calls return `REND-0009`.
-- Recreation waits for the device to be idle, then creates the new swapchain with `oldSwapchain` and destroys the old one (retired even on failure).
-- The renderer has no clock and no simulation access: resize and recovery cannot reset simulation time (FND-INV-06).
-
-**Ownership and shutdown order:** `Renderer` borrows the window, so the window (and its display connection) outlives every Vulkan object. Drop: wait for device idle → frames → swapchain → device → surface → validation messenger → instance. During construction each step owns what it created (RAII owners), so a failure releases exactly what exists, in reverse order.
+**Ownership and shutdown order:** `Renderer` borrows the window, so the window (and its display connection) outlives every Vulkan object. `teardown` / `Drop`: `vkDeviceWaitIdle` → offscreen targets → pipelines → shader modules → swapchain depth → frames → swapchain → allocator (`VkDeviceMemory` blocks, verified zero leaks) → device → surface → validation messenger → instance.
 
 **Tests:**
 
-- Headless, always run (CI): 37 unit tests + 7 `shader_validation` integration/property/fuzz/`insta`-snapshot tests (`F3D-T07`) without the feature: errors (2), types (4), presentation controller (18, including FND-T06 and FND-T07), selection (11), shader codec (2), plus `tests/shader_validation.rs` (7) and standalone Gate G2 `cargo-fuzz` package `crates/spawn-render/fuzz` (`decode_cooked_shader`). With `vulkan`: +2 (validation sink bounds, `VkFailure` classification).
-- GPU, opt-in (`cargo test -p spawn-render --features vulkan -- --ignored`, needs a Vulkan 1.3 GPU with `VK_EXT_headless_surface`): 120 presented frames; present-mode preferences (`Fifo`, `Mailbox`, `Immediate`); resize to zero (suspended, no acquire) and back to four sizes with matching swapchain extents; start suspended and create/drop three times; each asserts zero validation errors. All 4 pass on the reference hardware with `VK_LAYER_KHRONOS_validation` 1.4.363 and `VK_EXT_validation_features` synchronization validation active.
+- Headless, always run (CI): 45 unit/property tests (`errors`, `types`, `presentation` FND-T06/T07, `selection` + F3D-T09 rejections, `shader`, `handle`, `allocator` F3D-T08 + `proptest` + `insta`, `depth` F3D-T09 lifecycle) + 7 `shader_validation` tests (`F3D-T07`) + 1 `f3d_t13_render_hygiene` audit test without `vulkan`, plus standalone Gate G2 `cargo-fuzz` package `crates/spawn-render/fuzz`. With `vulkan`: +2 unit tests (`ValidationSink`, `VkFailure`).
+- GPU, opt-in (`VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true cargo test -p spawn-render --features vulkan -- --ignored`): 4 Foundation headless-surface tests + `tests/f3d_t11_triangle_gpu.rs` (`F3D-T11`: offscreen CCW colored triangle `vkCmdCopyImageToBuffer2` RGBA8 readback, CW backface culling, reversed-Z `z = 0.0` vs clipped `z = -0.25`, negative shader/layout/stale-handle/OOM checks, `VK_EXT_headless_surface` swapchain + `D32_SFLOAT` depth draw/resize/`0x0` suspend, `0` validation/sync errors, leak-free close & drop). All 5 pass on the reference AMD Radeon RX 460 (`radv Mesa 26.2.5-arch1.1`).
 
-**Manual smoke test:** `examples/vulkan_clear.rs` in the root package (the composition root may depend on both `spawn-platform` and `spawn-render`; this crate must not); drains trailing validation messages on exit and returns a non-zero exit code on validation errors. Records: [VERIFICATION](../../docs/foundation/VERIFICATION.md#recorded-smoke-runs).
+**Manual smoke tests:** `examples/vulkan_clear.rs` (Foundation Phase 3) and `examples/vulkan_triangle.rs` (Milestone 2 Phase 3) in the root package. Records: [Foundation VERIFICATION](../../docs/foundation/VERIFICATION.md#recorded-smoke-runs) and [First 3D VERIFICATION](../../docs/first-3d/VERIFICATION.md#recorded-smoke-runs).
 
 **Not implemented / deferred:**
 
-- X11, Win32 and other surfaces (`REND-0002`); Windows is not claimed.
-- Separate graphics/present queue families (rejected with a reason), async compute, transfer queues.
-- Device-loss recovery (fatal by design for the foundation), HDR/wide-gamut color spaces, `VK_EXT_swapchain_maintenance1`.
-- GPU memory allocator, Vulkan shader modules/pipelines, render graph, debug names beyond swapchain/frame objects.
+- X11, Win32 and other native window surfaces (`REND-0002`); Windows is not claimed.
+- Static vertex/index buffer staging uploads and camera-relative 3D mesh draws (`PLANNED` for Milestone 2 Phase 4).
+- Separate graphics/present queue families, async compute, transfer queues, descriptor-set binding tables, render graph, HDR color spaces, device-loss recovery.
 
 ## Agent Instructions
 
 - Never add gameplay logic.
 - The backend is decided ([ADR-0004](../../docs/adr/0004-in-house-graphics-api.md)): Vulkan 1.3 through `ash`, in-house RHI as a private module, in-house GPU memory allocator; `wgpu` is a design reference only. Do not reopen this choice without a new ADR.
 - New dependencies beyond the approved list need justification under the root dependency rules and owner approval.
-- Start from the minimal vertical slice ([foundation PLAN](../../docs/foundation/PLAN.md): clear frame first; triangle and mesh/camera are later milestones); no premature render graph.
-- Keep `ash` types and `unsafe` inside `vulkan/`; put decisions (presentation, selection) in the pure modules and test them without a GPU.
+- Keep `ash` types and `unsafe` strictly inside `vulkan/`; keep `#![forbid(unsafe_code)]` in every module outside `vulkan/` and test pure logic headlessly without a GPU.
 - Never add a dependency on `spawn-platform`; smoke examples that need a window live in the composition root package.
 - New error kinds get the next `REND-` code; codes are never reused or renumbered.

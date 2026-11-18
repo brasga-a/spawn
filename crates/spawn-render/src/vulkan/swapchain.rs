@@ -208,12 +208,54 @@ impl Swapchain {
     }
 }
 
-/// The single color mip level and array layer of a swapchain image.
+/// The single color mip level and array layer of a 2D color attachment.
 pub(crate) fn color_range() -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange::default()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
         .level_count(1)
         .layer_count(1)
+}
+
+/// The single depth mip level and array layer of a `D32_SFLOAT` depth attachment.
+pub(crate) fn depth_range() -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::DEPTH)
+        .level_count(1)
+        .layer_count(1)
+}
+
+/// Queries the surface color format that [`Swapchain::create`] chooses, even
+/// when the window is currently suspended at `0x0` extent.
+pub(crate) fn query_chosen_surface_format(
+    device: &DeviceOwner,
+    surface: &SurfaceOwner,
+) -> Result<vk::Format, RenderError> {
+    // SAFETY: `device.physical` and `surface.handle` belong to the same valid instance.
+    let formats = unsafe {
+        surface
+            .loader
+            .get_physical_device_surface_formats(device.physical, surface.handle)
+    }
+    .map_err(|result| vk_error("vkGetPhysicalDeviceSurfaceFormatsKHR", result))?;
+    let options: Vec<_> = formats
+        .iter()
+        .map(|format| FormatOption {
+            kind: format_kind(format.format),
+            srgb_nonlinear: format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        })
+        .collect();
+    let choice = choose_format(&options).ok_or_else(|| {
+        vk_error(
+            "vkGetPhysicalDeviceSurfaceFormatsKHR",
+            vk::Result::ERROR_FORMAT_NOT_SUPPORTED,
+        )
+    })?;
+    formats.get(choice.index).map(|f| f.format).ok_or_else(|| {
+        vk_error(
+            "surface format selection",
+            vk::Result::ERROR_FORMAT_NOT_SUPPORTED,
+        )
+    })
 }
 
 fn format_kind(format: vk::Format) -> FormatKind {

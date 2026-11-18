@@ -16,8 +16,7 @@ pub(crate) enum SurfaceSource {
         display: RawDisplayHandle,
         window: RawWindowHandle,
     },
-    /// A `VK_EXT_headless_surface` surface for GPU tests without a window.
-    #[cfg(test)]
+    /// A `VK_EXT_headless_surface` surface for headless rendering and GPU tests without a window.
     Headless,
 }
 
@@ -37,7 +36,6 @@ impl SurfaceSource {
                 display_kind(display),
                 window_kind(window)
             ))),
-            #[cfg(test)]
             Self::Headless => Ok(SurfaceExtension::Headless),
         }
     }
@@ -96,7 +94,6 @@ impl SurfaceOwner {
             SurfaceSource::Window { .. } => {
                 return Err(source.extension().err().unwrap_or_else(unsupported));
             }
-            #[cfg(test)]
             SurfaceSource::Headless => {
                 let headless =
                     ash::ext::headless_surface::Instance::new(&instance.entry, &instance.instance);

@@ -1,12 +1,12 @@
 //! GPU enumeration, selection and logical device creation.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
 use ash::{ext, khr, vk};
 
 use crate::error::{RenderError, RenderErrorKind};
 use crate::selection::{
-    DeviceCandidate, QueueFamily, RequiredFeatures, decode_version, select_device,
+    DeviceCandidate, DeviceLimits, QueueFamily, RequiredFeatures, decode_version, select_device,
 };
 use crate::types::{GpuKind, RendererInfo};
 use crate::vulkan::instance::InstanceOwner;
@@ -20,6 +20,12 @@ pub(crate) struct DeviceOwner {
     pub queue: vk::Queue,
     pub queue_family: u32,
     pub swapchain: khr::swapchain::Device,
+    pub memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub buffer_image_granularity: u64,
+    pub max_image_dimension_2d: u32,
+    pub max_push_constants_size: u32,
+    pub max_vertex_input_attributes: u32,
+    pub max_vertex_input_binding_stride: u32,
     debug_utils: Option<ext::debug_utils::Device>,
 }
 
@@ -75,12 +81,24 @@ impl DeviceOwner {
             .enabled_extension_names(&extensions)
             .push_next(&mut features12)
             .push_next(&mut features13);
+        // SAFETY: `physical` was enumerated from this instance.
+        let physical_props = unsafe { instance.instance.get_physical_device_properties(physical) };
+        // SAFETY: `physical` was enumerated from this instance.
+        let memory_properties = unsafe {
+            instance
+                .instance
+                .get_physical_device_memory_properties(physical)
+        };
+
         // SAFETY: `physical` was enumerated from this instance and supports
         // every enabled feature and extension (checked by `select_device`).
         let device = unsafe { instance.instance.create_device(physical, &info, None) }
             .map_err(|result| vk_error("vkCreateDevice", result))?;
         // SAFETY: the queue family and index 0 were requested above.
         let queue = unsafe { device.get_device_queue(choice.queue_family, 0) };
+        let chosen_candidate = candidates
+            .get(choice.candidate)
+            .ok_or_else(|| RenderError::new(RenderErrorKind::NoSuitableDevice))?;
         let owner = Self {
             swapchain: khr::swapchain::Device::new(&instance.instance, &device),
             debug_utils: instance
@@ -90,8 +108,14 @@ impl DeviceOwner {
             physical,
             queue,
             queue_family: choice.queue_family,
+            memory_properties,
+            buffer_image_granularity: physical_props.limits.buffer_image_granularity.max(1),
+            max_image_dimension_2d: physical_props.limits.max_image_dimension2_d,
+            max_push_constants_size: physical_props.limits.max_push_constants_size,
+            max_vertex_input_attributes: physical_props.limits.max_vertex_input_attributes,
+            max_vertex_input_binding_stride: physical_props.limits.max_vertex_input_binding_stride,
         };
-        let info = renderer_info(instance, physical, &candidates[choice.candidate]);
+        let info = renderer_info(instance, physical, chosen_candidate);
         Ok((owner, info))
     }
 
@@ -105,6 +129,17 @@ impl DeviceOwner {
             // SAFETY: the handle belongs to this device; a failed naming call
             // only loses a debug label.
             let _ = unsafe { debug_utils.set_debug_utils_object_name(&info) };
+        }
+    }
+
+    /// Gives a Vulkan object a dynamic `&str` debug name when debug-utils is
+    /// active, performing zero allocation when debug-utils is disabled.
+    pub(crate) fn name_str<H: vk::Handle>(&self, handle: H, label: &str) {
+        if self.debug_utils.is_some() {
+            let clean: Vec<u8> = label.bytes().filter(|&b| b != 0).collect();
+            if let Ok(cstr) = CString::new(clean) {
+                self.name(handle, &cstr);
+            }
         }
     }
 
@@ -232,12 +267,28 @@ fn query_candidate(
     }
     .map_or(0, |modes| modes.len());
 
+    // SAFETY: see above.
+    let d32_format_props = unsafe {
+        vk_instance.get_physical_device_format_properties(physical, vk::Format::D32_SFLOAT)
+    };
+    let d32_sfloat_depth_attachment = d32_format_props
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT);
+    let limits = DeviceLimits {
+        max_push_constants_size: properties.limits.max_push_constants_size,
+        max_vertex_input_attributes: properties.limits.max_vertex_input_attributes,
+        max_vertex_input_bindings: properties.limits.max_vertex_input_bindings,
+        max_vertex_input_binding_stride: properties.limits.max_vertex_input_binding_stride,
+    };
+
     Ok(DeviceCandidate {
         name,
         kind: gpu_kind(properties.device_type),
         api_version: properties.api_version,
         has_swapchain_extension,
         features,
+        d32_sfloat_depth_attachment,
+        limits,
         queue_families,
         surface_formats,
         present_modes,

@@ -1,5 +1,7 @@
 //! Error types of `spawn-render` (ADR-0009: hand-written, located, coded).
 
+#![forbid(unsafe_code)]
+
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::fmt;
 use std::panic::Location;
@@ -43,6 +45,14 @@ pub enum RenderErrorKind {
     /// `REND-0011`: a cooked shader's reflected interface does not match the
     /// expected pipeline layout.
     ShaderLayoutMismatch,
+    /// `REND-0012`: GPU memory suballocation or block allocation failed or
+    /// exceeded the configured memory budget.
+    GpuMemoryExhausted,
+    /// `REND-0013`: a resource handle is stale, destroyed, or forged.
+    InvalidResourceHandle,
+    /// `REND-0014`: a pipeline or render-target descriptor has invalid
+    /// parameters or target compatibility.
+    InvalidResourceDescriptor,
 }
 
 impl RenderErrorKind {
@@ -60,6 +70,9 @@ impl RenderErrorKind {
             Self::RendererFailed => "REND-0009",
             Self::InvalidShaderArtifact => "REND-0010",
             Self::ShaderLayoutMismatch => "REND-0011",
+            Self::GpuMemoryExhausted => "REND-0012",
+            Self::InvalidResourceHandle => "REND-0013",
+            Self::InvalidResourceDescriptor => "REND-0014",
         }
     }
 
@@ -77,6 +90,9 @@ impl RenderErrorKind {
             Self::RendererFailed => "the renderer stopped after an earlier fatal error",
             Self::InvalidShaderArtifact => "invalid cooked shader artifact",
             Self::ShaderLayoutMismatch => "shader interface does not match pipeline layout",
+            Self::GpuMemoryExhausted => "GPU memory allocation failed or exceeded budget",
+            Self::InvalidResourceHandle => "invalid or stale render resource handle",
+            Self::InvalidResourceDescriptor => "invalid render resource or target descriptor",
         }
     }
 }
@@ -237,9 +253,12 @@ mod tests {
             K::RendererFailed,
             K::InvalidShaderArtifact,
             K::ShaderLayoutMismatch,
+            K::GpuMemoryExhausted,
+            K::InvalidResourceHandle,
+            K::InvalidResourceDescriptor,
         ];
         let codes: Vec<_> = kinds.iter().map(|kind| kind.code()).collect();
-        let expected: Vec<_> = (1..=11).map(|n| format!("REND-{n:04}")).collect();
+        let expected: Vec<_> = (1..=14).map(|n| format!("REND-{n:04}")).collect();
         assert_eq!(codes, expected);
     }
 
