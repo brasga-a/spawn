@@ -16,11 +16,11 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 | Crate | License | Kind | Where | Purpose | ADR | In use |
 | --- | --- | --- | --- | --- | --- | --- |
 | `windows-sys` | MIT/Apache-2.0 | dep | `spawn-platform`, `spawn-audio` | Win32 and WASAPI declarations | [0001](adr/0001-in-house-platform-layer.md), [0006](adr/0006-in-house-audio.md) | no |
-| `wayland-client` | MIT | dep | `spawn-platform` | Wayland protocol | [0001](adr/0001-in-house-platform-layer.md) | no |
-| `wayland-protocols` | MIT | dep | `spawn-platform` | Wayland protocol extensions | [0001](adr/0001-in-house-platform-layer.md) | no |
+| `wayland-client` | MIT | dep | `spawn-platform` | Wayland protocol | [0001](adr/0001-in-house-platform-layer.md) | yes (`spawn-platform`, feature `wayland`; `dlopen` + `system`) |
+| `wayland-protocols` | MIT | dep | `spawn-platform` | Wayland protocol extensions | [0001](adr/0001-in-house-platform-layer.md) | yes (`spawn-platform`, feature `wayland`) |
 | `x11rb` | MIT/Apache-2.0 | dep | `spawn-platform` | X11 protocol | [0001](adr/0001-in-house-platform-layer.md) | no |
 | `xkbcommon` | MIT | dep | `spawn-platform` | Linux keyboard keymaps | [0001](adr/0001-in-house-platform-layer.md) | no |
-| `raw-window-handle` | MIT/Apache-2.0/Zlib | dep | `spawn-platform`, `spawn-render` | Window handle contract | [0004](adr/0004-in-house-graphics-api.md) | no |
+| `raw-window-handle` | MIT/Apache-2.0/Zlib | dep | `spawn-platform`, `spawn-render` | Window handle contract | [0004](adr/0004-in-house-graphics-api.md) | yes (`spawn-platform`, feature `wayland`) |
 | `ash` | MIT/Apache-2.0 | dep | `spawn-render` | Vulkan bindings | [0004](adr/0004-in-house-graphics-api.md) | no |
 | `serde` | MIT/Apache-2.0 | dep | data-defining crates | Serialization framework | [0013](adr/0013-declarative-data-format.md) | no |
 | `ron` | MIT/Apache-2.0 | dep | data-defining crates | Authored data format | [0013](adr/0013-declarative-data-format.md) | no |
@@ -54,7 +54,7 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `rustix` | Apache-2.0/MIT | dep | `spawn-platform`, `spawn-io`, `spawn-audio` | Linux system calls without raw libc | no |
+| `rustix` | Apache-2.0/MIT | dep | `spawn-platform`, `spawn-io`, `spawn-audio` | Linux system calls without raw libc | yes (`spawn-platform`, feature `wayland`) |
 | `evdev` | MIT/Apache-2.0 | dep | `spawn-platform` | Linux gamepads ([ADR-0018](adr/0018-gamepad-input.md)) | no |
 | `udev` | MIT | dep | `spawn-platform` | Device hotplug | no |
 | `hidapi` | MIT (C library: BSD) | dep | `spawn-platform` | HID access (DualSense, Switch Pro) | no |

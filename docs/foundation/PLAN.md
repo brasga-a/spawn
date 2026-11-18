@@ -8,11 +8,16 @@
 | --- | --- | --- |
 | 0. Decisions | Accept ADRs 0001–0004 and choose the smoke-test platform. **Done:** ADRs accepted; first platform Linux/Wayland (Hyprland). | Accepted ADRs and recorded platform scope. |
 | 1. Clock contract | Fixed-step timing policy in `spawn-core` with injected elapsed durations. **Done:** `FixedStepClock` implemented. | T01, T02 headless tests passing (`crates/spawn-core/tests/fixed_step_verification.rs`). |
-| 2. Platform | Small native window/event pump with raw event mapping in `spawn-platform`. | Window visible, close works, T05 and T10 as applicable. |
+| 2. Platform | Small native window/event pump with raw event mapping in `spawn-platform`: one window; close, resize, focus, scale (DPI) and occlusion events; keyboard keys; pointer enter/leave/motion/buttons/scroll; window handle for the renderer. Relative motion and cursor lock are **not** in this phase (see 2b and [Scope notes](#scope-notes)). **Implemented:** raw event types (no backend) and the Wayland backend behind feature `wayland`; X11 and Win32 not started. **Validation incomplete.** | Window visible, close works, T05 and T10 as applicable. Done: T05 and T10 (platform part) pass headless (`crates/spawn-platform/src/linux/translate.rs`); window mapped on Hyprland ([smoke record](VERIFICATION.md#recorded-smoke-runs)). **Pending:** manual test of closing through the compositor's close control (owner). Phase 2 is not validated until it passes. |
+| 2b. Pointer capture | Relative pointer motion and cursor lock/confinement in `spawn-platform` (Wayland: `zwp_relative_pointer_v1`, `zwp_pointer_constraints_v1`). Required by [ADR-0001](../adr/0001-in-house-platform-layer.md) decision 3 (foundation scope); no `FND-FR` requirement depends on it. **PLANNED**, not started. | Headless translation tests for relative motion and lock state; manual smoke on Hyprland (lock, unlock, focus loss while locked). |
 | 3. Renderer | Surface/device setup, clear/present and resize/recovery policy in `spawn-render`. | Clear frame; T06, T07, manual resize/minimize. |
 | 4. Input | Device transitions and tick-based input sampling in `spawn-input`. | T03, T04 pass without window. |
 | 5. Composition | Root `spawn-engine` binary wires subsystems, handles errors and cleanup. | T08, T09 and full smoke run; no unrelated crates changed. |
 | 6. Completion | Document tested platforms, collect evidence, update statuses. | [Verification exit gate](VERIFICATION.md) satisfied. |
+
+## Scope notes
+
+**Relative pointer motion and cursor lock (Phase 2 → 2b).** [ADR-0001](../adr/0001-in-house-platform-layer.md) (accepted), detailed decision 3, lists "keyboard and mouse (including relative motion and cursor lock)" in the foundation scope. The milestone requirements in [SPEC](SPEC.md) do not need them: FND-FR-02 and FND-FR-09 ask for raw pointer events and pointer motion, and the exit evidence is a clear frame, not camera control. They are therefore moved out of Phase 2 into the separate increment 2b. This changes only the phase split, not the accepted decision: 2b remains part of the foundation milestone, and the [exit gate](VERIFICATION.md#exit-gate) (item 6, implementation matches accepted ADRs) is not met until 2b is done. Moving these features out of the foundation milestone altogether would change ADR-0001 and needs an explicit owner decision recorded in that ADR; it is not made here.
 
 These are feature increments, not necessarily one pull request each. Keep each change reviewable; do not add all backends, editor UI, ECS or gameplay to get a clear frame.
 

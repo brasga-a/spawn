@@ -1,6 +1,6 @@
 # Verification and Acceptance — Foundation
 
-**Status:** test plan. Implemented and passing: FND-T01, FND-T02 (`crates/spawn-core/tests/fixed_step_verification.rs`). All other cases are not yet implemented.
+**Status:** test plan. Implemented and passing: FND-T01, FND-T02 (`crates/spawn-core/tests/fixed_step_verification.rs`); FND-T05 and the platform part of FND-T10 (`crates/spawn-platform/src/linux/translate.rs`, headless, no backend feature). The composition-root part of FND-T10 (shutdown on close) belongs to Phase 5. All other cases are not yet implemented.
 
 ## Required automated checks
 
@@ -33,6 +33,12 @@ On **at least one explicitly named tested platform**, record (first platform: th
 
 A documented Linux-only smoke run does **not** imply Windows support. macOS is not a target.
 
+## Recorded smoke runs
+
+| Date | Phase | Environment | Command | Observed | Not verified |
+| --- | --- | --- | --- | --- | --- |
+| 2026-11-17 | 2 (platform) | Omarchy 4.0.6 (Arch-based), kernel 7.2.15, Hyprland 0.56.2 (Wayland, native, not XWayland), monitor scale 1.0; reference hardware | `SPAWN_SMOKE_SECONDS=8 cargo run -p spawn-platform --features wayland --example wayland_window` | Window mapped (`hyprctl clients`: `mapped: true`, `xwayland: false`) with stand-in `wl_shm` content; ordered `Focused`, `Resized` (tiling 1265→1257→624 px wide, repainted), `Key` (Alt/Super press and release), `PointerEntered`/`PointerMoved`/`PointerLeft` events; auto-close exited 0 with no lingering process. With `WAYLAND_DISPLAY` pointing nowhere: `error[PLAT-0001]` report, exit 1, no panic. | Close through the compositor's close control (`xdg_toplevel.close`); fractional/integer scale > 1 and scale changes; `Occluded` (`suspended`, xdg-shell v6); compositors other than Hyprland; X11; Windows. |
+
 ## Traceability
 
 - Functional requirements: [SPEC.md](SPEC.md) `FND-FR-01..11`.
@@ -52,3 +58,5 @@ The foundation milestone is **complete only if**:
 5. Boundary checks show no prohibited dependencies.
 6. All relevant ADRs are accepted and implementation matches them.
 7. Any unsupported platforms and untested recovery cases are called out explicitly.
+
+Open items against this gate: relative pointer motion and cursor lock ([PLAN](PLAN.md#scope-notes) increment 2b, required by ADR-0001 foundation scope); manual test of closing through the compositor's close control (Phase 2).

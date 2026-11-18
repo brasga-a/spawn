@@ -8,4 +8,36 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# No backend by default: the raw event types compile without native code (ADR-0002).
+default = []
+# Native Wayland backend (Linux only; ignored on other targets). libwayland-client
+# is loaded at runtime (dlopen), so building needs no system libraries and a
+# missing library is a startup error, not a link failure.
+wayland = [
+    "dep:raw-window-handle",
+    "dep:rustix",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+]
+
 [dependencies]
+raw-window-handle = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, optional = true, features = ["event", "std"] }
+wayland-client = { workspace = true, optional = true, features = ["dlopen", "system"] }
+wayland-protocols = { workspace = true, optional = true, features = ["client", "staging", "unstable"] }
+
+# The smoke example stands in for the renderer: it attaches a shared-memory
+# buffer through the raw-window-handle contract, as spawn-render will do with Vulkan.
+[dev-dependencies]
+raw-window-handle = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["fs", "std"] }
+wayland-client = { workspace = true, features = ["dlopen", "system"] }
+
+[[example]]
+name = "wayland_window"
+required-features = ["wayland"]

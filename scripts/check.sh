@@ -40,6 +40,11 @@ run cargo fmt --all --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps
+# Native backends are off by default (ADR-0002); check them explicitly.
+# They load their system libraries at runtime, so no system packages are needed.
+run cargo clippy -p spawn-platform --features wayland --all-targets -- -D warnings
+run cargo test -p spawn-platform --features wayland
+RUSTDOCFLAGS="-D warnings" run cargo doc -p spawn-platform --features wayland --no-deps
 run cargo deny check
 
 echo "All mandatory checks ran and passed."
