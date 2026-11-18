@@ -9,6 +9,8 @@
 //! The controller has no clock and no access to simulation state: resize and
 //! recovery can never reset or advance simulation time (FND-INV-06).
 
+#![forbid(unsafe_code)]
+
 use crate::types::{PresentationState, SurfaceSize};
 
 /// Consecutive failed swapchain/surface recreations before giving up.

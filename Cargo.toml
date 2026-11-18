@@ -73,3 +73,7 @@ spawn-render = { version = "0.1.0", path = "crates/spawn-render", default-featur
 [[example]]
 name = "vulkan_clear"
 path = "examples/vulkan_clear.rs"
+
+[[example]]
+name = "vulkan_triangle"
+path = "examples/vulkan_triangle.rs"

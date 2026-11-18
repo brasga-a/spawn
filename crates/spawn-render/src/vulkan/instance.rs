@@ -106,8 +106,7 @@ unsafe extern "system" fn on_validation_message(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfaceExtension {
     Wayland,
-    /// `VK_EXT_headless_surface`, for GPU tests without a window.
-    #[cfg(test)]
+    /// `VK_EXT_headless_surface`, for headless rendering and GPU tests without a window.
     Headless,
 }
 
@@ -115,7 +114,6 @@ impl SurfaceExtension {
     fn name(self) -> &'static CStr {
         match self {
             Self::Wayland => ash::khr::wayland_surface::NAME,
-            #[cfg(test)]
             Self::Headless => ext::headless_surface::NAME,
         }
     }

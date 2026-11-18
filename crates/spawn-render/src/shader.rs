@@ -519,10 +519,24 @@ impl CookedShader {
         Self::decode_inner(bytes, None)
     }
 
+    /// Alias of [`Self::decode`]: decodes and validates an untrusted cooked-shader
+    /// byte slice (`SPN-INV-034`).
+    #[track_caller]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, RenderError> {
+        Self::decode_inner(bytes, None)
+    }
+
     /// Decodes and validates an untrusted cooked-shader byte slice, prefixing
     /// `label` (such as an artifact path) onto any error detail (`SPN-INV-081`).
     #[track_caller]
     pub fn decode_named(label: &str, bytes: &[u8]) -> Result<Self, RenderError> {
+        Self::decode_inner(bytes, Some(label))
+    }
+
+    /// Alias of [`Self::decode_named`]: decodes and validates an untrusted
+    /// cooked-shader byte slice with a diagnostic `label`.
+    #[track_caller]
+    pub fn from_bytes_named(label: &str, bytes: &[u8]) -> Result<Self, RenderError> {
         Self::decode_inner(bytes, Some(label))
     }
 

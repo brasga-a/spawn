@@ -2,14 +2,30 @@
 //!
 //! The Vulkan backend queries each GPU and surface, converts the answers into
 //! the plain data below and applies the decisions. Requirements follow
-//! ADR-0004: Vulkan 1.3 with dynamic rendering, synchronization2, timeline
-//! semaphores and descriptor indexing (bindless), plus `VK_KHR_swapchain` and
-//! one queue family that supports both graphics and presentation.
+//! ADR-0004 and Milestone 2: Vulkan 1.3 with dynamic rendering,
+//! synchronization2, timeline semaphores and descriptor indexing (bindless),
+//! optimal-tiling `VK_FORMAT_D32_SFLOAT` depth-stencil attachment support,
+//! push-constant and vertex-input limits, `VK_KHR_swapchain`, and one queue
+//! family that supports both graphics and presentation.
+
+#![forbid(unsafe_code)]
 
 use crate::types::{GpuKind, PresentModePreference, SurfaceSize};
 
 /// Required Vulkan version (major, minor).
 pub(crate) const REQUIRED_API_VERSION: (u32, u32) = (1, 3);
+
+/// Minimum `VkPhysicalDeviceLimits::maxPushConstantsSize` in bytes (Vulkan 1.3 baseline).
+pub(crate) const MIN_PUSH_CONSTANTS_SIZE: u32 = 128;
+
+/// Minimum `VkPhysicalDeviceLimits::maxVertexInputAttributes` required by 3D mesh pipelines.
+pub(crate) const MIN_VERTEX_INPUT_ATTRIBUTES: u32 = 3;
+
+/// Minimum `VkPhysicalDeviceLimits::maxVertexInputBindings` required by 3D mesh pipelines.
+pub(crate) const MIN_VERTEX_INPUT_BINDINGS: u32 = 1;
+
+/// Minimum `VkPhysicalDeviceLimits::maxVertexInputBindingStride` in bytes (`3 + 3 + 4` `f32`s = 40 B).
+pub(crate) const MIN_VERTEX_INPUT_BINDING_STRIDE: u32 = 40;
 
 /// Decodes a packed Vulkan version (`VK_MAKE_API_VERSION`).
 pub(crate) const fn decode_version(packed: u32) -> (u32, u32, u32) {
@@ -90,6 +106,52 @@ impl RequiredFeatures {
     }
 }
 
+/// Hardware limits checked during device selection (`DESIGN.md` §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeviceLimits {
+    pub max_push_constants_size: u32,
+    pub max_vertex_input_attributes: u32,
+    pub max_vertex_input_bindings: u32,
+    pub max_vertex_input_binding_stride: u32,
+}
+
+impl DeviceLimits {
+    #[cfg(test)]
+    pub(crate) const MINIMUM: Self = Self {
+        max_push_constants_size: MIN_PUSH_CONSTANTS_SIZE,
+        max_vertex_input_attributes: MIN_VERTEX_INPUT_ATTRIBUTES,
+        max_vertex_input_bindings: MIN_VERTEX_INPUT_BINDINGS,
+        max_vertex_input_binding_stride: MIN_VERTEX_INPUT_BINDING_STRIDE,
+    };
+
+    fn problems(&self, out: &mut Vec<String>) {
+        if self.max_push_constants_size < MIN_PUSH_CONSTANTS_SIZE {
+            out.push(format!(
+                "maxPushConstantsSize {} < {MIN_PUSH_CONSTANTS_SIZE}",
+                self.max_push_constants_size
+            ));
+        }
+        if self.max_vertex_input_attributes < MIN_VERTEX_INPUT_ATTRIBUTES {
+            out.push(format!(
+                "maxVertexInputAttributes {} < {MIN_VERTEX_INPUT_ATTRIBUTES}",
+                self.max_vertex_input_attributes
+            ));
+        }
+        if self.max_vertex_input_bindings < MIN_VERTEX_INPUT_BINDINGS {
+            out.push(format!(
+                "maxVertexInputBindings {} < {MIN_VERTEX_INPUT_BINDINGS}",
+                self.max_vertex_input_bindings
+            ));
+        }
+        if self.max_vertex_input_binding_stride < MIN_VERTEX_INPUT_BINDING_STRIDE {
+            out.push(format!(
+                "maxVertexInputBindingStride {} < {MIN_VERTEX_INPUT_BINDING_STRIDE}",
+                self.max_vertex_input_binding_stride
+            ));
+        }
+    }
+}
+
 /// One queue family of a GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct QueueFamily {
@@ -107,6 +169,9 @@ pub(crate) struct DeviceCandidate {
     pub has_swapchain_extension: bool,
     /// `None` when the device is below Vulkan 1.3 (features not queried).
     pub features: Option<RequiredFeatures>,
+    /// Optimal-tiling `VK_FORMAT_D32_SFLOAT` supports `DEPTH_STENCIL_ATTACHMENT`.
+    pub d32_sfloat_depth_attachment: bool,
+    pub limits: DeviceLimits,
     pub queue_families: Vec<QueueFamily>,
     pub surface_formats: usize,
     pub present_modes: usize,
@@ -147,6 +212,13 @@ fn evaluate(candidate: &DeviceCandidate) -> Result<u32, String> {
         }
         None => {}
     }
+    if !candidate.d32_sfloat_depth_attachment {
+        problems.push(
+            "format `VK_FORMAT_D32_SFLOAT` lacks optimal-tiling `DEPTH_STENCIL_ATTACHMENT` support"
+                .to_owned(),
+        );
+    }
+    candidate.limits.problems(&mut problems);
     let family = candidate
         .queue_families
         .iter()
@@ -329,6 +401,8 @@ mod tests {
             api_version: version(1, 4),
             has_swapchain_extension: true,
             features: Some(RequiredFeatures::ALL),
+            d32_sfloat_depth_attachment: true,
+            limits: DeviceLimits::MINIMUM,
             queue_families: vec![
                 QueueFamily {
                     graphics: false,
@@ -520,6 +594,44 @@ mod tests {
         assert_eq!(
             choose_extent(None, size(100, 100), size(50, 50), size(10, 10)),
             size(100, 100)
+        );
+    }
+
+    /// F3D-T09 (selection part): rejects GPUs missing `VK_FORMAT_D32_SFLOAT`
+    /// optimal depth-stencil attachment support, `timelineSemaphore` /
+    /// `dynamicRendering` / `synchronization2`, `maxPushConstantsSize >= 128`,
+    /// or vertex-input limits (`3` attributes, `1` binding, `40` B stride).
+    #[test]
+    fn f3d_t09_rejects_missing_d32_depth_timeline_semaphore_and_pipeline_limits() {
+        let mut no_d32 = good("no-d32", GpuKind::Discrete);
+        no_d32.d32_sfloat_depth_attachment = false;
+
+        let mut no_timeline_or_dyn = good("no-timeline", GpuKind::Integrated);
+        no_timeline_or_dyn.features = Some(RequiredFeatures {
+            dynamic_rendering: false,
+            synchronization2: false,
+            timeline_semaphore: false,
+            ..RequiredFeatures::ALL
+        });
+
+        let mut small_limits = good("tiny-limits", GpuKind::Discrete);
+        small_limits.limits = DeviceLimits {
+            max_push_constants_size: 64,
+            max_vertex_input_attributes: 2,
+            max_vertex_input_bindings: 0,
+            max_vertex_input_binding_stride: 32,
+        };
+
+        let rejections = select_device(&[no_d32, no_timeline_or_dyn, small_limits])
+            .err()
+            .unwrap_or_default();
+        assert_eq!(
+            rejections,
+            [
+                "no-d32: format `VK_FORMAT_D32_SFLOAT` lacks optimal-tiling `DEPTH_STENCIL_ATTACHMENT` support",
+                "no-timeline: missing features dynamicRendering, synchronization2, timelineSemaphore",
+                "tiny-limits: maxPushConstantsSize 64 < 128; maxVertexInputAttributes 2 < 3; maxVertexInputBindings 0 < 1; maxVertexInputBindingStride 32 < 40",
+            ]
         );
     }
 }

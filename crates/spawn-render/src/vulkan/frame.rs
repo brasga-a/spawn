@@ -2,28 +2,34 @@
 //!
 //! Synchronization strategy:
 //!
-//! - One **timeline semaphore** counts submitted frames. Frame `n` signals
+//! - One **timeline semaphore** counts submitted passes. Submission `n` signals
 //!   value `n`; before a frame slot is reused, the CPU waits until the
 //!   timeline reaches the value that slot last signaled, so its command buffer
 //!   and acquire semaphore are no longer in use.
 //! - Each slot has a binary **acquire semaphore** (signaled by the
-//!   presentation engine, waited by the submission at color-attachment
+//!   presentation engine, waited by swapchain submissions at color-attachment
 //!   output).
 //! - Each swapchain image has a binary **present semaphore** (signaled by the
 //!   submission at `ALL_COMMANDS` after the present layout transition, waited
 //!   by presentation); see `Swapchain`.
-//! - Layout transitions use synchronization2 barriers:
-//!   `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` before dynamic rendering clears
-//!   the image, `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR` after it.
+//! - Layout transitions use `synchronization2` barriers:
+//!   - Swapchain color: `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, then
+//!     `COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR`.
+//!   - Reversed-Z `D32_SFLOAT` depth: `UNDEFINED → DEPTH_ATTACHMENT_OPTIMAL`
+//!     ordered across `EARLY_FRAGMENT_TESTS | LATE_FRAGMENT_TESTS` (`READ | WRITE`)
+//!     and cleared to `0.0` (`REVERSED_Z_CLEAR_DEPTH`).
+//!   - Offscreen readback: `COLOR_ATTACHMENT_OPTIMAL → TRANSFER_SRC_OPTIMAL`,
+//!     `vkCmdCopyImageToBuffer2`, and `COPY (TRANSFER_WRITE) → HOST (HOST_READ)`.
 
 use std::time::Duration;
 
 use ash::vk;
 
+use crate::depth::REVERSED_Z_CLEAR_DEPTH;
 use crate::error::{RenderError, RenderErrorKind};
 use crate::types::SurfaceSize;
 use crate::vulkan::device::DeviceOwner;
-use crate::vulkan::swapchain::color_range;
+use crate::vulkan::swapchain::{color_range, depth_range};
 use crate::vulkan::vk_error;
 
 /// Frames the CPU may record ahead of the GPU.
@@ -38,6 +44,37 @@ struct FrameSlot {
     acquire: vk::Semaphore,
     /// Timeline value signaled by this slot's last submission (0: none).
     submitted: u64,
+}
+
+/// Optional graphics draw inside a dynamic-rendering pass.
+#[derive(Clone, Copy)]
+pub(crate) struct DrawCommand {
+    pub pipeline: vk::Pipeline,
+    pub vertex_count: u32,
+}
+
+/// Swapchain render target bindings for one frame.
+#[derive(Clone, Copy)]
+pub(crate) struct SwapchainPassTarget {
+    pub color_image: vk::Image,
+    pub color_view: vk::ImageView,
+    pub depth_image: vk::Image,
+    pub depth_view: vk::ImageView,
+    pub extent: SurfaceSize,
+    pub clear_color: [f32; 4],
+}
+
+/// Offscreen render + readback bindings for one deterministic capture pass.
+#[derive(Clone, Copy)]
+pub(crate) struct OffscreenPassTarget {
+    pub color_image: vk::Image,
+    pub color_view: vk::ImageView,
+    pub depth_image: vk::Image,
+    pub depth_view: vk::ImageView,
+    pub extent: SurfaceSize,
+    pub clear_color: [f32; 4],
+    pub readback_buffer: vk::Buffer,
+    pub readback_bytes: u64,
 }
 
 /// All per-frame resources. Destroyed explicitly with the device.
@@ -82,6 +119,47 @@ impl Frames {
         Ok(frames)
     }
 
+    /// Most recent timeline value submitted to the queue (`0` before first submission).
+    pub(crate) const fn last_submitted(&self) -> u64 {
+        self.last_submitted
+    }
+
+    /// Queries the current GPU-completed counter value of the timeline semaphore.
+    pub(crate) fn completed_timeline(&self, device: &DeviceOwner) -> Result<u64, RenderError> {
+        if self.timeline == vk::Semaphore::null() {
+            return Ok(self.last_submitted);
+        }
+        // SAFETY: `self.timeline` is a valid timeline semaphore created on `device`.
+        unsafe { device.device.get_semaphore_counter_value(self.timeline) }
+            .map_err(|result| vk_error("vkGetSemaphoreCounterValue", result))
+    }
+
+    /// Waits until `self.timeline` reaches at least `value` on the GPU.
+    pub(crate) fn wait_timeline(
+        &self,
+        device: &DeviceOwner,
+        value: u64,
+    ) -> Result<(), RenderError> {
+        if value == 0 {
+            return Ok(());
+        }
+        let semaphores = [self.timeline];
+        let values = [value];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        let timeout = u64::try_from(GPU_WAIT_TIMEOUT.as_nanos()).unwrap_or(u64::MAX);
+        // SAFETY: `self.timeline` belongs to `device`.
+        match unsafe { device.device.wait_semaphores(&info, timeout) } {
+            Ok(()) => Ok(()),
+            Err(vk::Result::TIMEOUT) => Err(RenderError::new(RenderErrorKind::GpuTimeout)
+                .with_detail(format!(
+                    "timeline value {value} not reached after {GPU_WAIT_TIMEOUT:?}"
+                ))),
+            Err(result) => Err(vk_error("vkWaitSemaphores", result)),
+        }
+    }
+
     /// Waits until the next slot's previous submission finished.
     pub(crate) fn begin(&mut self, device: &DeviceOwner) -> Result<FrameTicket, RenderError> {
         let index = self.next;
@@ -89,39 +167,30 @@ impl Frames {
             .slots
             .get(index)
             .ok_or_else(|| RenderError::new(RenderErrorKind::VulkanCallFailed))?;
-        if slot.submitted > 0 {
-            let semaphores = [self.timeline];
-            let values = [slot.submitted];
-            let info = vk::SemaphoreWaitInfo::default()
-                .semaphores(&semaphores)
-                .values(&values);
-            let timeout = u64::try_from(GPU_WAIT_TIMEOUT.as_nanos()).unwrap_or(u64::MAX);
-            // SAFETY: the timeline belongs to this device.
-            match unsafe { device.device.wait_semaphores(&info, timeout) } {
-                Ok(()) => {}
-                Err(vk::Result::TIMEOUT) => {
-                    return Err(RenderError::new(RenderErrorKind::GpuTimeout).with_detail(
-                        format!("frame slot {index} not finished after {GPU_WAIT_TIMEOUT:?}"),
-                    ));
+        let acquire = slot.acquire;
+        let submitted = slot.submitted;
+        if submitted > 0 {
+            self.wait_timeline(device, submitted).map_err(|err| {
+                if err.kind() == RenderErrorKind::GpuTimeout {
+                    RenderError::new(RenderErrorKind::GpuTimeout).with_detail(format!(
+                        "frame slot {index} not finished after {GPU_WAIT_TIMEOUT:?}"
+                    ))
+                } else {
+                    err
                 }
-                Err(result) => return Err(vk_error("vkWaitSemaphores", result)),
-            }
+            })?;
         }
-        Ok(FrameTicket {
-            index,
-            acquire: slot.acquire,
-        })
+        Ok(FrameTicket { index, acquire })
     }
 
-    /// Records the clear of `image` into the ticket's command buffer.
-    pub(crate) fn record_clear(
+    /// Records a swapchain dynamic-rendering pass (color clear + `D32_SFLOAT`
+    /// reversed-Z depth clear to `0.0` + optional triangle/mesh draw) into `ticket`.
+    pub(crate) fn record_swapchain_pass(
         &self,
         device: &DeviceOwner,
         ticket: &FrameTicket,
-        image: vk::Image,
-        view: vk::ImageView,
-        extent: SurfaceSize,
-        color: [f32; 4],
+        target: &SwapchainPassTarget,
+        draw: Option<DrawCommand>,
     ) -> Result<(), RenderError> {
         let slot = self.slot(ticket)?;
         let vk_device = &device.device;
@@ -135,34 +204,68 @@ impl Frames {
         unsafe { vk_device.begin_command_buffer(slot.commands, &begin) }
             .map_err(|result| vk_error("vkBeginCommandBuffer", result))?;
 
-        let to_attachment = [vk::ImageMemoryBarrier2::default()
-            // Chains with the acquire semaphore wait at this stage.
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .image(image)
-            .subresource_range(color_range())];
-        let attachments = [vk::RenderingAttachmentInfo::default()
-            .image_view(view)
+        let depth_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+        let depth_access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE;
+
+        let to_attachments = [
+            vk::ImageMemoryBarrier2::default()
+                // Chains with the acquire semaphore wait at this stage.
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .image(target.color_image)
+                .subresource_range(color_range()),
+            vk::ImageMemoryBarrier2::default()
+                // Orders after prior frame depth reads/writes on the shared depth image.
+                .src_stage_mask(depth_stages)
+                .src_access_mask(depth_access)
+                .dst_stage_mask(depth_stages)
+                .dst_access_mask(depth_access)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .image(target.depth_image)
+                .subresource_range(depth_range()),
+        ];
+
+        let color_attachments = [vk::RenderingAttachmentInfo::default()
+            .image_view(target.color_view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(vk::ClearValue {
-                color: vk::ClearColorValue { float32: color },
-            })];
-        let rendering = vk::RenderingInfo::default()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D::default(),
-                extent: vk::Extent2D {
-                    width: extent.width,
-                    height: extent.height,
+                color: vk::ClearColorValue {
+                    float32: target.clear_color,
                 },
-            })
+            })];
+        let depth_attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(target.depth_view)
+            .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .clear_value(vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: REVERSED_Z_CLEAR_DEPTH,
+                    stencil: 0,
+                },
+            });
+        let render_area = vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent: vk::Extent2D {
+                width: target.extent.width,
+                height: target.extent.height,
+            },
+        };
+        let rendering = vk::RenderingInfo::default()
+            .render_area(render_area)
             .layer_count(1)
-            .color_attachments(&attachments);
+            .color_attachments(&color_attachments)
+            .depth_attachment(&depth_attachment);
+
         let to_present = [vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
             .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
@@ -172,17 +275,21 @@ impl Frames {
             .dst_access_mask(vk::AccessFlags2::NONE)
             .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .image(image)
+            .image(target.color_image)
             .subresource_range(color_range())];
-        // SAFETY: the command buffer is recording; `image` and `view` belong
-        // to the current swapchain, which stays alive until this submission
-        // completes (recreation waits for the device to be idle).
+
+        // SAFETY: the command buffer is recording; color and depth images/views
+        // and any bound pipeline belong to `device` and stay alive until this
+        // submission completes on the timeline semaphore.
         unsafe {
             vk_device.cmd_pipeline_barrier2(
                 slot.commands,
-                &vk::DependencyInfo::default().image_memory_barriers(&to_attachment),
+                &vk::DependencyInfo::default().image_memory_barriers(&to_attachments),
             );
             vk_device.cmd_begin_rendering(slot.commands, &rendering);
+            if let Some(cmd) = draw {
+                record_viewport_scissor_and_draw(vk_device, slot.commands, target.extent, cmd);
+            }
             vk_device.cmd_end_rendering(slot.commands);
             vk_device.cmd_pipeline_barrier2(
                 slot.commands,
@@ -194,7 +301,193 @@ impl Frames {
             .map_err(|result| vk_error("vkEndCommandBuffer", result))
     }
 
-    /// Submits the ticket's commands: waits for the acquire semaphore,
+    /// Records an offscreen `R8G8B8A8_UNORM` + `D32_SFLOAT` reversed-Z dynamic-rendering
+    /// draw, transitions color to `TRANSFER_SRC_OPTIMAL`, copies into `target.readback_buffer`
+    /// via `vkCmdCopyImageToBuffer2`, orders `COPY -> HOST_READ`, submits on `device.queue`
+    /// signaling the timeline semaphore, and waits for completion. Returns the signaled
+    /// timeline value.
+    pub(crate) fn execute_offscreen_draw_and_copy(
+        &mut self,
+        device: &DeviceOwner,
+        target: &OffscreenPassTarget,
+        draw: DrawCommand,
+    ) -> Result<u64, RenderError> {
+        let ticket = self.begin(device)?;
+        let commands_handle = self.slot(&ticket)?.commands;
+        let pool_handle = self.slot(&ticket)?.pool;
+        let vk_device = &device.device;
+
+        // SAFETY: `begin` waited for this slot's previous submission to complete.
+        unsafe { vk_device.reset_command_pool(pool_handle, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|result| vk_error("vkResetCommandPool", result))?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: `commands_handle` is in initial state after resetting `pool_handle`.
+        unsafe { vk_device.begin_command_buffer(commands_handle, &begin_info) }
+            .map_err(|result| vk_error("vkBeginCommandBuffer", result))?;
+
+        let depth_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+        let depth_access = vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE;
+
+        let pre_render_barriers = [
+            vk::ImageMemoryBarrier2::default()
+                // Orders after any prior offscreen render or `TRANSFER_READ` copy on the same target.
+                .src_stage_mask(
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags2::COPY,
+                )
+                .src_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE | vk::AccessFlags2::TRANSFER_READ,
+                )
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .image(target.color_image)
+                .subresource_range(color_range()),
+            vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(depth_stages)
+                .src_access_mask(depth_access)
+                .dst_stage_mask(depth_stages)
+                .dst_access_mask(depth_access)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .image(target.depth_image)
+                .subresource_range(depth_range()),
+        ];
+
+        let color_attachments = [vk::RenderingAttachmentInfo::default()
+            .image_view(target.color_view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: target.clear_color,
+                },
+            })];
+        let depth_attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(target.depth_view)
+            .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: REVERSED_Z_CLEAR_DEPTH,
+                    stencil: 0,
+                },
+            });
+        let rendering = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent: vk::Extent2D {
+                    width: target.extent.width,
+                    height: target.extent.height,
+                },
+            })
+            .layer_count(1)
+            .color_attachments(&color_attachments)
+            .depth_attachment(&depth_attachment);
+
+        let to_transfer_src = [vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .image(target.color_image)
+            .subresource_range(color_range())];
+
+        let copy_regions = [vk::BufferImageCopy2::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .image_extent(vk::Extent3D {
+                width: target.extent.width,
+                height: target.extent.height,
+                depth: 1,
+            })];
+        let copy_info = vk::CopyImageToBufferInfo2::default()
+            .src_image(target.color_image)
+            .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .dst_buffer(target.readback_buffer)
+            .regions(&copy_regions);
+
+        let to_host_read = [vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+            .dst_access_mask(vk::AccessFlags2::HOST_READ)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(target.readback_buffer)
+            .offset(0)
+            .size(target.readback_bytes)];
+
+        // SAFETY: `commands_handle` is recording, offscreen images/views, pipeline,
+        // and `readback_buffer` belong to `device` and stay alive through `wait_timeline` below.
+        unsafe {
+            vk_device.cmd_pipeline_barrier2(
+                commands_handle,
+                &vk::DependencyInfo::default().image_memory_barriers(&pre_render_barriers),
+            );
+            vk_device.cmd_begin_rendering(commands_handle, &rendering);
+            record_viewport_scissor_and_draw(vk_device, commands_handle, target.extent, draw);
+            vk_device.cmd_end_rendering(commands_handle);
+            vk_device.cmd_pipeline_barrier2(
+                commands_handle,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_transfer_src),
+            );
+            vk_device.cmd_copy_image_to_buffer2(commands_handle, &copy_info);
+            vk_device.cmd_pipeline_barrier2(
+                commands_handle,
+                &vk::DependencyInfo::default().buffer_memory_barriers(&to_host_read),
+            );
+            vk_device
+                .end_command_buffer(commands_handle)
+                .map_err(|result| vk_error("vkEndCommandBuffer", result))?;
+        }
+
+        let value = self.last_submitted.saturating_add(1);
+        let cmd_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(commands_handle)];
+        let signals = [vk::SemaphoreSubmitInfo::default()
+            .semaphore(self.timeline)
+            .value(value)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
+        let submit = [vk::SubmitInfo2::default()
+            .command_buffer_infos(&cmd_infos)
+            .signal_semaphore_infos(&signals)];
+
+        // SAFETY: `commands_handle` is executable, `self.timeline` belongs to `device`,
+        // and `device.queue` is accessed exclusively on this thread.
+        unsafe { vk_device.queue_submit2(device.queue, &submit, vk::Fence::null()) }
+            .map_err(|result| vk_error("vkQueueSubmit2 (offscreen)", result))?;
+
+        self.last_submitted = value;
+        if let Some(slot) = self.slots.get_mut(ticket.index) {
+            slot.submitted = value;
+        }
+        self.next = (ticket.index + 1) % FRAMES_IN_FLIGHT;
+
+        self.wait_timeline(device, value)?;
+        Ok(value)
+    }
+
+    /// Submits the ticket's swapchain commands: waits for the acquire semaphore,
     /// signals `present` and the next timeline value.
     pub(crate) fn submit(
         &mut self,
@@ -224,9 +517,8 @@ impl Frames {
             .wait_semaphore_infos(&waits)
             .command_buffer_infos(&commands)
             .signal_semaphore_infos(&signals)];
-        // SAFETY: the command buffer was recorded by `record_clear`; the
-        // semaphores belong to this device; the queue is used from this thread
-        // only.
+        // SAFETY: the command buffer was recorded by `record_swapchain_pass`; the
+        // semaphores belong to this device; the queue is used from this thread only.
         unsafe {
             device
                 .device
@@ -261,6 +553,43 @@ impl Frames {
         self.slots.get(ticket.index).ok_or_else(|| {
             RenderError::new(RenderErrorKind::VulkanCallFailed).with_detail("frame slot missing")
         })
+    }
+}
+
+/// Binds `draw.pipeline`, configures a positive-height `[0.0, 1.0]` `VkViewport`
+/// (never flipping Y in viewport; `SPN-INV-053`) and full-extent `VkRect2D`
+/// scissor, and records `vkCmdDraw`.
+fn record_viewport_scissor_and_draw(
+    vk_device: &ash::Device,
+    commands: vk::CommandBuffer,
+    extent: SurfaceSize,
+    draw: DrawCommand,
+) {
+    let viewports = [vk::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: extent.width as f32,
+        height: extent.height as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+    }];
+    let scissors = [vk::Rect2D {
+        offset: vk::Offset2D { x: 0, y: 0 },
+        extent: vk::Extent2D {
+            width: extent.width,
+            height: extent.height,
+        },
+    }];
+    // SAFETY: `commands` is inside an active `cmd_begin_rendering` pass matching
+    // `draw.pipeline`'s color and `D32_SFLOAT` depth formats, with dynamic
+    // `VIEWPORT` and `SCISSOR` states enabled on `draw.pipeline`.
+    unsafe {
+        vk_device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, draw.pipeline);
+        vk_device.cmd_set_viewport(commands, 0, &viewports);
+        vk_device.cmd_set_scissor(commands, 0, &scissors);
+        if draw.vertex_count > 0 {
+            vk_device.cmd_draw(commands, draw.vertex_count, 1, 0, 0);
+        }
     }
 }
 
