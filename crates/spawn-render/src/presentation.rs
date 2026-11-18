@@ -117,12 +117,13 @@ impl PresentationController {
         if self.state == PresentationState::Fatal {
             return;
         }
+        let changed = self.requested != size;
         self.requested = size;
         if size.is_empty() {
             self.state = PresentationState::Suspended;
             return;
         }
-        if self.swapchain != Some(size) {
+        if changed && self.swapchain != Some(size) {
             self.stale = true;
         }
         self.state = self.drawable_state();
@@ -386,6 +387,25 @@ mod tests {
         let mut controller = PresentationController::new(HD);
         controller.swapchain_recreated(SurfaceSize::new(1270, 710));
         assert_eq!(controller.plan(), Some(FramePlan::Acquire));
+    }
+
+    #[test]
+    fn repeating_requested_size_when_surface_clamps_is_idempotent() {
+        let mut controller = PresentationController::new(HD);
+        controller.swapchain_recreated(SurfaceSize::new(1270, 710));
+        for _ in 0..3 {
+            controller.resize(HD);
+            assert_eq!(controller.state(), PresentationState::Ready);
+            assert_eq!(controller.plan(), Some(FramePlan::Acquire));
+        }
+        // Explicitly requesting the surface's own extent also reuses it.
+        controller.resize(SurfaceSize::new(1270, 710));
+        assert_eq!(controller.state(), PresentationState::Ready);
+        assert_eq!(controller.plan(), Some(FramePlan::Acquire));
+        // Requesting a genuinely new size schedules recreation.
+        controller.resize(SurfaceSize::new(800, 600));
+        assert_eq!(controller.state(), PresentationState::Recovering);
+        assert_eq!(controller.plan(), Some(FramePlan::RecreateSwapchain));
     }
 
     /// FND-T07: out-of-date acquire skips the frame and recreates next time.

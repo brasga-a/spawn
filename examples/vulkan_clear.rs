@@ -41,7 +41,9 @@ mod smoke {
         ElementState, Event, KeyCode, LogicalSize, Platform, PumpMode, WindowDescriptor,
         WindowEvent,
     };
-    use spawn_render::{ClearColor, FrameOutcome, Renderer, RendererDescriptor, SurfaceSize};
+    use spawn_render::{
+        ClearColor, FrameOutcome, Renderer, RendererDescriptor, SurfaceSize, ValidationMessage,
+    };
 
     /// A deep teal, distinct from compositor backgrounds and from the
     /// `wl_shm` smoke example's color.
@@ -160,13 +162,7 @@ mod smoke {
             }
 
             if last_report.elapsed() >= Duration::from_secs(1) {
-                let dropped = renderer.drain_validation_messages(&mut messages);
-                for message in messages.drain(..) {
-                    eprintln!("validation {:?}: {}", message.severity, message.text);
-                }
-                if dropped > 0 {
-                    eprintln!("validation: {dropped} message(s) dropped");
-                }
+                report_validation(&mut renderer, &mut messages);
                 eprintln!(
                     "t={:>5.1}s presented={} suspended={} skipped={} idle_waits={} state={:?}",
                     started.elapsed().as_secs_f64(),
@@ -183,18 +179,35 @@ mod smoke {
             }
         }
 
+        report_validation(&mut renderer, &mut messages);
         let validation_errors = renderer.validation_error_count();
         // Teardown in ownership order: GPU resources, window, connection.
         drop(renderer);
         drop(window);
         drop(platform);
+        let reason = close.unwrap_or("loop ended");
+        if validation_errors > 0 {
+            return Err(format!(
+                "closed ({reason}) with {validation_errors} validation error(s): \
+                 presented={} suspended={} skipped={}",
+                counts.presented, counts.suspended, counts.skipped
+            )
+            .into());
+        }
         eprintln!(
-            "closed cleanly ({}): presented={} suspended={} skipped={} validation_errors={validation_errors}",
-            close.unwrap_or("loop ended"),
-            counts.presented,
-            counts.suspended,
-            counts.skipped
+            "closed cleanly ({reason}): presented={} suspended={} skipped={} validation_errors=0",
+            counts.presented, counts.suspended, counts.skipped
         );
         Ok(())
+    }
+
+    fn report_validation(renderer: &mut Renderer<'_>, messages: &mut Vec<ValidationMessage>) {
+        let dropped = renderer.drain_validation_messages(messages);
+        for message in messages.drain(..) {
+            eprintln!("validation {:?}: {}", message.severity, message.text);
+        }
+        if dropped > 0 {
+            eprintln!("validation: {dropped} message(s) dropped");
+        }
     }
 }

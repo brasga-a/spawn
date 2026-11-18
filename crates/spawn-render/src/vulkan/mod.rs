@@ -56,8 +56,9 @@ pub(crate) fn vk_error(call: &'static str, result: vk::Result) -> RenderError {
 }
 
 /// A swapchain-creation failure: recoverable surface conditions or fatal.
+#[derive(Debug)]
 pub(crate) enum VkFailure {
-    /// Out of date, surface lost or window in use: retry within bounds.
+    /// Out of date or surface lost: retry within bounds.
     Recoverable {
         surface_lost: bool,
     },
@@ -68,11 +69,9 @@ impl VkFailure {
     #[track_caller]
     pub(crate) fn from_call(call: &'static str, result: vk::Result) -> Self {
         match result {
-            vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR => {
-                Self::Recoverable {
-                    surface_lost: false,
-                }
-            }
+            vk::Result::ERROR_OUT_OF_DATE_KHR => Self::Recoverable {
+                surface_lost: false,
+            },
             vk::Result::ERROR_SURFACE_LOST_KHR => Self::Recoverable { surface_lost: true },
             _ => Self::Fatal(vk_error(call, result)),
         }
@@ -402,6 +401,43 @@ impl Drop for VulkanRenderer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vk_failure_classifies_recoverable_and_fatal_results() {
+        assert!(matches!(
+            VkFailure::from_call("vkCreateSwapchainKHR", vk::Result::ERROR_OUT_OF_DATE_KHR),
+            VkFailure::Recoverable {
+                surface_lost: false
+            }
+        ));
+        assert!(matches!(
+            VkFailure::from_call("vkCreateSwapchainKHR", vk::Result::ERROR_SURFACE_LOST_KHR),
+            VkFailure::Recoverable { surface_lost: true }
+        ));
+        match VkFailure::from_call(
+            "vkCreateSwapchainKHR",
+            vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR,
+        ) {
+            VkFailure::Fatal(error) => {
+                assert_eq!(error.kind(), RenderErrorKind::VulkanCallFailed);
+                assert_eq!(error.detail(), Some("vkCreateSwapchainKHR"));
+            }
+            other @ VkFailure::Recoverable { .. } => {
+                panic!("expected fatal error for window in use, got {other:?}")
+            }
+        }
+        match VkFailure::from_call("vkCreateSwapchainKHR", vk::Result::ERROR_DEVICE_LOST) {
+            VkFailure::Fatal(error) => assert_eq!(error.kind(), RenderErrorKind::DeviceLost),
+            other @ VkFailure::Recoverable { .. } => {
+                panic!("expected fatal error for device lost, got {other:?}")
+            }
+        }
+    }
+}
+
 /// GPU tests through `VK_EXT_headless_surface`: the real backend without a
 /// window. Opt-in because CI has no GPU:
 /// `cargo test -p spawn-render --features vulkan -- --ignored`.
@@ -413,9 +449,16 @@ mod gpu_tests {
     const IGNORE: &str = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface";
 
     fn renderer(size: SurfaceSize) -> VulkanRenderer {
+        renderer_with_mode(size, PresentModePreference::Fifo)
+    }
+
+    fn renderer_with_mode(
+        size: SurfaceSize,
+        present_mode: PresentModePreference,
+    ) -> VulkanRenderer {
         let descriptor = RendererDescriptor {
+            present_mode,
             validation: Validation::IfAvailable,
-            ..RendererDescriptor::default()
         };
         match VulkanRenderer::new(SurfaceSource::Headless, size, &descriptor) {
             Ok(renderer) => renderer,
@@ -505,6 +548,26 @@ mod gpu_tests {
                 renderer.render_clear(color()),
                 Ok(FrameOutcome::Presented)
             ));
+            assert_no_validation_errors(&renderer);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
+    fn presents_across_present_mode_preferences() {
+        for mode in [
+            PresentModePreference::Fifo,
+            PresentModePreference::Mailbox,
+            PresentModePreference::Immediate,
+        ] {
+            let mut renderer = renderer_with_mode(SurfaceSize::new(320, 240), mode);
+            for frame in 0..32 {
+                let outcome = renderer.render_clear(color());
+                assert!(
+                    matches!(outcome, Ok(FrameOutcome::Presented)),
+                    "{mode:?} frame {frame}: {outcome:?}"
+                );
+            }
             assert_no_validation_errors(&renderer);
         }
     }
