@@ -806,3 +806,108 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn f3d_t07_deterministic_fuzz_corpus_and_mutator_10k_iterations() {
+    fn next_u64(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    let valid_vs = sample_mesh_vertex_shader().encode().unwrap();
+    let valid_fs = sample_mesh_fragment_shader().encode().unwrap();
+    let valid_cs = CookedShader {
+        version: SHADER_FORMAT_VERSION,
+        stage: ShaderStage::Compute,
+        entry_point: "cs_main".to_owned(),
+        push_constants: PushConstantRange::new(16, ShaderStageFlags::COMPUTE),
+        descriptor_bindings: vec![DescriptorBinding {
+            set: 0,
+            binding: 0,
+            kind: DescriptorKind::StorageBuffer,
+            count: 1,
+            stages: ShaderStageFlags::COMPUTE,
+        }],
+        vertex_inputs: Vec::new(),
+        spirv_words: synth_spirv(ShaderStage::Compute, "cs_main"),
+    }
+    .encode()
+    .unwrap();
+
+    let corpus: &[&[u8]] = &[&valid_vs, &valid_fs, &valid_cs, &[], b"SPNSHDR\0"];
+    let mut prng = 0x5EED_F00D_CAFE_BABEu64;
+
+    for iter in 0..10_000_usize {
+        let base = corpus[iter % corpus.len()];
+        let mut candidate = base.to_vec();
+
+        let mode = next_u64(&mut prng) % 4;
+        if !candidate.is_empty() && mode == 0 {
+            let flips = ((next_u64(&mut prng) % 4) + 1) as usize;
+            for _ in 0..flips {
+                let idx = (next_u64(&mut prng) as usize) % candidate.len();
+                let mask = ((next_u64(&mut prng) % 255) + 1) as u8;
+                candidate[idx] ^= mask;
+            }
+        } else if !candidate.is_empty() && mode == 1 {
+            let new_len = (next_u64(&mut prng) as usize) % candidate.len();
+            candidate.truncate(new_len);
+        } else if mode == 2 {
+            let extra_len = (next_u64(&mut prng) as usize) % 64;
+            for _ in 0..extra_len {
+                candidate.push(next_u64(&mut prng) as u8);
+            }
+        } else {
+            let rand_len = (next_u64(&mut prng) as usize) % 256;
+            candidate.clear();
+            for _ in 0..rand_len {
+                candidate.push(next_u64(&mut prng) as u8);
+            }
+        }
+
+        if let Ok(shader) = CookedShader::decode(&candidate)
+            && let Ok(reencoded) = shader.encode()
+        {
+            assert!(CookedShader::decode(&reencoded).is_ok());
+        }
+
+        let mut u = Unstructured::new(&candidate);
+        if let (Ok(stage_choice), Ok(push_size), Ok(push_bits)) = (
+            u.int_in_range::<u8>(0..=2),
+            u.int_in_range::<u32>(0..=300),
+            u.arbitrary::<u32>(),
+        ) {
+            let stage = match stage_choice {
+                0 => ShaderStage::Vertex,
+                1 => ShaderStage::Fragment,
+                _ => ShaderStage::Compute,
+            };
+            let push_stages = ShaderStageFlags::from_bits(push_bits & 0b111).unwrap_or_default();
+            let expected = ShaderLayoutExpectation {
+                stage,
+                vertex_inputs: &[VertexInputAttribute::new(0, VertexFormat::Float32x3)],
+                push_constants: PushConstantRange::new(push_size, push_stages),
+                descriptor_bindings: &[DescriptorBinding {
+                    set: 0,
+                    binding: 0,
+                    kind: DescriptorKind::UniformBuffer,
+                    count: 1,
+                    stages: ShaderStageFlags::ALL,
+                }],
+            };
+            if let Ok(shader) = CookedShader::decode_named("corpus_mut.spnshdr", u.take_rest()) {
+                let _ = shader.validate_against(&expected);
+                let layout = PipelineLayoutDesc {
+                    vertex_inputs: expected.vertex_inputs,
+                    push_constants: expected.push_constants,
+                    descriptor_bindings: expected.descriptor_bindings,
+                };
+                let _ = validate_graphics_pipeline_shaders(&shader, &shader, &layout);
+            }
+        }
+    }
+}

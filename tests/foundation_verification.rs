@@ -21,7 +21,9 @@ use spawn_platform::{
     WindowEvent, WindowId,
 };
 use spawn_render::{
-    ClearColor, FrameOutcome, PresentationState, RendererDescriptor, SurfaceSize,
+    CameraRelativeView, ClearColor, CookedShader, FrameOutcome, GpuAllocatorStats,
+    GraphicsPipelineDescriptor, MeshDescriptor, MeshDraw, MeshHandle, PipelineHandle,
+    PresentationState, RendererDescriptor, ShaderHandle, ShaderStage, SurfaceSize,
     ValidationMessage, ValidationSeverity,
 };
 
@@ -118,6 +120,82 @@ impl RenderSurface for MockRenderer<'_> {
 
     fn validation_error_count(&self) -> u64 {
         self.validation_errors
+    }
+
+    fn load_shader(
+        &mut self,
+        label: &str,
+        cooked_bytes: &[u8],
+    ) -> Result<ShaderHandle, EngineError> {
+        let cooked = CookedShader::decode_named(label, cooked_bytes).map_err(|err| {
+            EngineError::new(EngineErrorKind::Shader)
+                .with_detail(format!("loading cooked shader `{label}`"))
+                .with_cause(&err)
+        })?;
+        let slot = match cooked.stage {
+            ShaderStage::Vertex => 0,
+            ShaderStage::Fragment => 1,
+            ShaderStage::Compute => 2,
+        };
+        Ok(ShaderHandle::from_raw(slot, 1))
+    }
+
+    fn destroy_shader(&mut self, _handle: ShaderHandle) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn create_graphics_pipeline(
+        &mut self,
+        descriptor: &GraphicsPipelineDescriptor<'_>,
+    ) -> Result<PipelineHandle, EngineError> {
+        if descriptor.vertex_shader == descriptor.fragment_shader {
+            return Err(EngineError::new(EngineErrorKind::Shader).with_detail(
+                "vertex_shader and fragment_shader cannot reference the same ShaderHandle",
+            ));
+        }
+        Ok(PipelineHandle::from_raw(0, 1))
+    }
+
+    fn destroy_pipeline(&mut self, _handle: PipelineHandle) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn upload_mesh(&mut self, descriptor: &MeshDescriptor<'_>) -> Result<MeshHandle, EngineError> {
+        descriptor.validate().map_err(|err| {
+            EngineError::new(EngineErrorKind::Render)
+                .with_detail(format!("uploading mesh `{}`", descriptor.label))
+                .with_cause(&err)
+        })?;
+        Ok(MeshHandle::from_raw(0, 1))
+    }
+
+    fn destroy_mesh(&mut self, _handle: MeshHandle) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn render_meshes(
+        &mut self,
+        _pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<FrameOutcome, EngineError> {
+        for draw in draws {
+            draw.pack_push_constants(view).map_err(|err| {
+                EngineError::new(EngineErrorKind::Render)
+                    .with_detail("packing camera-relative 3D mesh push constants")
+                    .with_cause(&err)
+            })?;
+        }
+        self.render_clear(clear_color)
+    }
+
+    fn allocator_stats(&self) -> GpuAllocatorStats {
+        GpuAllocatorStats::default()
+    }
+
+    fn close(self) -> Result<GpuAllocatorStats, EngineError> {
+        Ok(self.allocator_stats())
     }
 }
 
@@ -289,6 +367,14 @@ impl RuntimeBackend for MockBackend {
         })
     }
 
+    fn read_cooked_shader(
+        &mut self,
+        shader_dir: &Path,
+        artifact_name: &str,
+    ) -> Result<Vec<u8>, EngineError> {
+        spawn_engine::synthesize_minimal_mesh_3d_shader(shader_dir, artifact_name)
+    }
+
     fn on_tick(&mut self, command: &InputCommand) {
         self.sampled_ticks.push(command.tick().get());
         self.observed_commands.push(*command);
@@ -387,6 +473,14 @@ impl RuntimeBackend for StepQueueBackend {
         descriptor: &RendererDescriptor,
     ) -> Result<Self::Renderer<'w>, EngineError> {
         self.inner.create_renderer(window, size, descriptor)
+    }
+
+    fn read_cooked_shader(
+        &mut self,
+        shader_dir: &Path,
+        artifact_name: &str,
+    ) -> Result<Vec<u8>, EngineError> {
+        self.inner.read_cooked_shader(shader_dir, artifact_name)
     }
 
     fn on_tick(&mut self, command: &InputCommand) {

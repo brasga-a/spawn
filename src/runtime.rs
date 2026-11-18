@@ -1,26 +1,36 @@
-//! Generic single-threaded foundation composition loop (ADR-0003,
-//! `docs/foundation/DESIGN.md`).
+//! Single-threaded composition loop (`ADR-0003`, `ADR-0010`, `ADR-0014`,
+//! `docs/foundation/DESIGN.md`, `docs/first-3d/DESIGN.md` §5).
 //!
-//! Coordinates `spawn-core`, `spawn-platform`, `spawn-input`, and
-//! `spawn-render` through a thin backend seam so startup failure unwinding
-//! (`FND-T08`), idempotent close handling (`FND-T10`), and simulation-clock
-//! continuity across surface suspension/recovery (`FND-INV-06`) are verified
-//! headlessly on every CI target while executing identically over Wayland and
-//! Vulkan on Linux.
+//! Coordinates `spawn-core` (`FixedStepClock`), `spawn-math` (`f64` [`WorldPos`],
+//! deterministic `det` camera math, reversed-Z projections), `spawn-platform`
+//! (window, raw events, cursor constraints), `spawn-input` (`InputMap`,
+//! tick-sampled [`InputCommand`]), and `spawn-render` (cooked shader validation,
+//! `dynamicRendering` 3D mesh pipeline, staged `DEVICE_LOCAL` meshes, and
+//! swapchain presentation) behind [`RuntimeBackend`] and [`RenderSurface`].
 
+#![forbid(unsafe_code)]
+#![deny(clippy::indexing_slicing)]
+
+use std::path::Path;
 use std::time::Duration;
 
 use spawn_core::{FixedStepClock, Tick};
-use spawn_input::{ActionId, ButtonTrigger, InputCommand, InputMap, InputState};
+use spawn_input::{InputCommand, InputState};
 use spawn_platform::{
-    CursorGrabMode, Event, KeyCode, PhysicalSize, WindowDescriptor, WindowEvent, WindowId,
+    CursorGrabMode, Event, PhysicalSize, WindowDescriptor, WindowEvent, WindowId,
 };
 use spawn_render::{
-    ClearColor, FrameOutcome, PresentationState, RendererDescriptor, SurfaceSize, ValidationMessage,
+    CameraRelativeView, ClearColor, CookedShader, FrameOutcome, GpuAllocatorStats,
+    GraphicsPipelineDescriptor, MESH_PUSH_CONSTANT_RANGE, MESH_VERTEX_ATTRIBUTES, MeshDescriptor,
+    MeshDraw, MeshHandle, PipelineHandle, PipelineLayoutDesc, PresentationState, PushConstantRange,
+    RendererDescriptor, SHADER_FORMAT_VERSION, SPIRV_MAGIC, ShaderHandle, ShaderStage, SurfaceSize,
+    ValidationMessage, validate_graphics_pipeline_shaders,
 };
 
-use crate::error::{EngineError, EngineErrorKind};
-use crate::options::RuntimeOptions;
+use crate::camera::{CameraInputBindings, FreeCamera, FreeCameraPose, interpolation_alpha};
+use crate::error::{EngineError, EngineErrorKind, SHADER_COOK_HINT};
+use crate::options::{RuntimeOptions, validate_shader_dir_path};
+use crate::scene::{MESH_3D_FS_ARTIFACT, MESH_3D_VS_ARTIFACT, ProceduralScene};
 
 /// Bounded event-wait timeout while presentation is suspended or occluded so
 /// the loop never busy-spins while remaining responsive to wakeup and close.
@@ -61,6 +71,12 @@ pub struct SessionSummary {
     pub frames_skipped: u64,
     /// Raw `WindowEvent::CloseRequested` events observed before shutdown.
     pub close_requests: u64,
+    /// Final cursor constraint state when the session loop exited.
+    pub final_cursor_grab: CursorGrabMode,
+    /// GPU block allocator snapshot captured before tearing down scene handles.
+    pub active_allocator_stats: GpuAllocatorStats,
+    /// Post-shutdown GPU block allocator snapshot returned by [`RenderSurface::close`].
+    pub shutdown_allocator_stats: GpuAllocatorStats,
 }
 
 /// Minimal window handle capability required by the composition loop.
@@ -69,7 +85,28 @@ pub trait WindowSurface {
     fn id(&self) -> WindowId;
 }
 
-/// Minimal renderer capability required by the composition loop.
+/// Renderer capability seam required by [`run_session`].
+///
+/// Every native renderer backend and headless test mock must implement all
+/// surface, cooked-shader, pipeline, mesh, allocator, and shutdown methods
+/// explicitly (no silent mock default implementations).
+///
+/// ```compile_fail
+/// use spawn_engine::{EngineError, RenderSurface};
+/// use spawn_render::{ClearColor, FrameOutcome, PresentationState, SurfaceSize, ValidationMessage};
+///
+/// struct IncompleteRenderer;
+///
+/// impl RenderSurface for IncompleteRenderer {
+///     fn resize(&mut self, _size: SurfaceSize) {}
+///     fn render_clear(&mut self, _color: ClearColor) -> Result<FrameOutcome, EngineError> {
+///         Ok(FrameOutcome::Presented)
+///     }
+///     fn state(&self) -> PresentationState { PresentationState::Ready }
+///     fn drain_validation_messages(&mut self, _out: &mut Vec<ValidationMessage>) -> u64 { 0 }
+///     fn validation_error_count(&self) -> u64 { 0 }
+/// }
+/// ```
 pub trait RenderSurface {
     /// Reports the latest physical pixel size of the drawable surface.
     fn resize(&mut self, size: SurfaceSize);
@@ -92,16 +129,100 @@ pub trait RenderSurface {
 
     /// Total error-severity validation messages observed since creation.
     fn validation_error_count(&self) -> u64;
+
+    /// Validates untrusted `.spnshdr` bytes with a diagnostic `label` and
+    /// returns a generational [`ShaderHandle`] (`ENGN-0008` on invalid shader).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0008` or `ENGN-0005`) on validation or
+    /// resource-pool failure.
+    fn load_shader(
+        &mut self,
+        label: &str,
+        cooked_bytes: &[u8],
+    ) -> Result<ShaderHandle, EngineError>;
+
+    /// Releases `handle`, invalidating its generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
+    fn destroy_shader(&mut self, handle: ShaderHandle) -> Result<(), EngineError>;
+
+    /// Validates shader compatibility and compiles a `dynamicRendering`
+    /// graphics pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0008` on reflection mismatch, `ENGN-0005`
+    /// on GPU compilation failure).
+    fn create_graphics_pipeline(
+        &mut self,
+        descriptor: &GraphicsPipelineDescriptor<'_>,
+    ) -> Result<PipelineHandle, EngineError>;
+
+    /// Releases `handle`, retiring the underlying GPU pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
+    fn destroy_pipeline(&mut self, handle: PipelineHandle) -> Result<(), EngineError>;
+
+    /// Validates `descriptor` and uploads vertices and `u32` indices into
+    /// `DEVICE_LOCAL` buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) on invalid descriptor or GPU memory
+    /// exhaustion.
+    fn upload_mesh(&mut self, descriptor: &MeshDescriptor<'_>) -> Result<MeshHandle, EngineError>;
+
+    /// Releases an uploaded 3D mesh handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) if `handle` is invalid or stale.
+    fn destroy_mesh(&mut self, handle: MeshHandle) -> Result<(), EngineError>;
+
+    /// Clears the next swapchain image to `clear_color` and `D32_SFLOAT`
+    /// reversed-Z depth to `0.0`, draws `draws` as camera-relative indexed 3D
+    /// meshes (`SPN-INV-052`), and queues presentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) on invalid draw state or
+    /// unrecoverable presentation failure.
+    fn render_meshes(
+        &mut self,
+        pipeline: PipelineHandle,
+        clear_color: ClearColor,
+        view: &CameraRelativeView,
+        draws: &[MeshDraw],
+    ) -> Result<FrameOutcome, EngineError>;
+
+    /// Current GPU block suballocator statistics.
+    fn allocator_stats(&self) -> GpuAllocatorStats;
+
+    /// Waits for GPU idle, releases remaining renderer-internal resources and
+    /// memory blocks, and returns post-shutdown [`GpuAllocatorStats`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] (`ENGN-0005`) if GPU shutdown fails.
+    fn close(self) -> Result<GpuAllocatorStats, EngineError>
+    where
+        Self: Sized;
 }
 
-/// Backend seam supplying monotonic elapsed time, window/event pumping, and
-/// surface rendering to [`run_session`].
+/// Backend seam supplying monotonic elapsed time, cooked-shader artifact I/O,
+/// window/event pumping, and surface rendering to [`run_session`].
 pub trait RuntimeBackend {
     /// Owned platform event-loop connection (dropped last).
     type Platform;
     /// Owned native top-level window (dropped before [`Self::Platform`]).
     type Window: WindowSurface;
-    /// Owned renderer borrowing `&'w Self::Window` (dropped before
+    /// Owned renderer borrowing `&'w Self::Window` (closed/dropped before
     /// [`Self::Window`]).
     type Renderer<'w>: RenderSurface
     where
@@ -168,9 +289,98 @@ pub trait RuntimeBackend {
         descriptor: &RendererDescriptor,
     ) -> Result<Self::Renderer<'w>, EngineError>;
 
+    /// Loads raw cooked `.spnshdr` bytes for `artifact_name` inside
+    /// `shader_dir` (`ADR-0014`, `SPN-INV-083`).
+    ///
+    /// Native backends must read `shader_dir.join(artifact_name)` from disk and
+    /// include [`SHADER_COOK_HINT`] on missing files; headless test harnesses
+    /// must supply fixtures explicitly (for example via
+    /// [`synthesize_minimal_mesh_3d_shader`]) rather than relying on a silent
+    /// trait default.
+    ///
+    /// ```compile_fail
+    /// use std::path::Path;
+    /// use std::time::Duration;
+    /// use spawn_engine::{EngineError, RenderSurface, RuntimeBackend, WindowSurface};
+    /// use spawn_platform::{CursorGrabMode, Event, PhysicalSize, WindowDescriptor, WindowId};
+    /// use spawn_render::{RendererDescriptor, SurfaceSize};
+    ///
+    /// struct MissingShaderReader;
+    /// struct DummyWin(WindowId);
+    /// impl WindowSurface for DummyWin { fn id(&self) -> WindowId { self.0 } }
+    ///
+    /// // Missing `read_cooked_shader` must fail to compile.
+    /// impl RuntimeBackend for MissingShaderReader {
+    ///     type Platform = ();
+    ///     type Window = DummyWin;
+    ///     type Renderer<'w> = DummyRenderer where Self::Window: 'w;
+    ///     fn read_elapsed(&mut self) -> Duration { Duration::ZERO }
+    ///     fn create_platform(&mut self) -> Result<(), EngineError> { Ok(()) }
+    ///     fn create_window(&mut self, _: &mut (), _: &WindowDescriptor)
+    ///         -> Result<(DummyWin, PhysicalSize), EngineError> { unreachable!() }
+    ///     fn set_cursor_grab(&mut self, _: &mut (), _: WindowId, _: CursorGrabMode)
+    ///         -> Result<(), EngineError> { Ok(()) }
+    ///     fn pump_events(&mut self, _: &mut (), _: Option<Duration>, _: &mut Vec<Event>)
+    ///         -> Result<(), EngineError> { Ok(()) }
+    ///     fn create_renderer<'w>(&mut self, _: &'w DummyWin, _: SurfaceSize, _: &RendererDescriptor)
+    ///         -> Result<Self::Renderer<'w>, EngineError> { unreachable!() }
+    /// }
+    /// # struct DummyRenderer;
+    /// # impl RenderSurface for DummyRenderer {
+    /// #     fn resize(&mut self, _: SurfaceSize) {}
+    /// #     fn render_clear(&mut self, _: spawn_render::ClearColor) -> Result<spawn_render::FrameOutcome, EngineError> { unreachable!() }
+    /// #     fn state(&self) -> spawn_render::PresentationState { unreachable!() }
+    /// #     fn drain_validation_messages(&mut self, _: &mut Vec<spawn_render::ValidationMessage>) -> u64 { 0 }
+    /// #     fn validation_error_count(&self) -> u64 { 0 }
+    /// #     fn load_shader(&mut self, _: &str, _: &[u8]) -> Result<spawn_render::ShaderHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_shader(&mut self, _: spawn_render::ShaderHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn create_graphics_pipeline(&mut self, _: &spawn_render::GraphicsPipelineDescriptor<'_>) -> Result<spawn_render::PipelineHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_pipeline(&mut self, _: spawn_render::PipelineHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn upload_mesh(&mut self, _: &spawn_render::MeshDescriptor<'_>) -> Result<spawn_render::MeshHandle, EngineError> { unreachable!() }
+    /// #     fn destroy_mesh(&mut self, _: spawn_render::MeshHandle) -> Result<(), EngineError> { Ok(()) }
+    /// #     fn render_meshes(&mut self, _: spawn_render::PipelineHandle, _: spawn_render::ClearColor, _: &spawn_render::CameraRelativeView, _: &[spawn_render::MeshDraw]) -> Result<spawn_render::FrameOutcome, EngineError> { unreachable!() }
+    /// #     fn allocator_stats(&self) -> spawn_render::GpuAllocatorStats { Default::default() }
+    /// #     fn close(self) -> Result<spawn_render::GpuAllocatorStats, EngineError> { Ok(Default::default()) }
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineErrorKind::Shader`] (`ENGN-0008`) if the artifact cannot
+    /// be read.
+    fn read_cooked_shader(
+        &mut self,
+        shader_dir: &Path,
+        artifact_name: &str,
+    ) -> Result<Vec<u8>, EngineError>;
+
+    /// Observer hook invoked once after shaders, pipeline, and procedural 3D
+    /// meshes are uploaded.
+    fn on_scene_initialized(
+        &mut self,
+        _mesh_count: usize,
+        _instance_count: usize,
+        _stats: GpuAllocatorStats,
+    ) {
+    }
+
     /// Observer hook invoked once per executed simulation tick with the sampled
     /// [`InputCommand`].
     fn on_tick(&mut self, _command: &InputCommand) {}
+
+    /// Observer hook invoked once per executed simulation tick after stepping
+    /// [`FreeCamera`].
+    fn on_camera_tick(
+        &mut self,
+        _tick: Tick,
+        _pose: &FreeCameraPose,
+        _cursor_grab: CursorGrabMode,
+    ) {
+    }
+
+    /// Diagnostic hook invoked when an optional interactive cursor-grab request
+    /// is unsupported by the window system and degrades to [`CursorGrabMode::None`].
+    fn on_cursor_grab_unavailable(&mut self, _error: &EngineError) {}
 
     /// Diagnostic hook invoked when catch-up clamping drops `dropped` backlog.
     fn on_backlog_dropped(&mut self, _dropped: Duration) {}
@@ -179,23 +389,158 @@ pub trait RuntimeBackend {
     fn on_validation_messages(&mut self, _messages: &[ValidationMessage], _dropped: u64) {}
 
     /// Diagnostic hook invoked on notable window lifecycle events (`Resized`,
-    /// `Occluded`, `ScaleFactorChanged`, `CursorGrabChanged`).
+    /// `Occluded`, `ScaleFactorChanged`, `CursorGrabChanged`, `Focused`).
     fn on_window_event(&mut self, _window: WindowId, _event: &WindowEvent) {}
 
-    /// Diagnostic hook invoked once per second or on shutdown with current
-    /// presentation state and counters.
+    /// Diagnostic hook invoked once per frame step with current presentation
+    /// state and cumulative elapsed time.
     fn on_frame_step(&mut self, _state: PresentationState, _elapsed: Duration) {}
+
+    /// Diagnostic hook invoked on clean shutdown with pre-teardown and
+    /// post-close [`GpuAllocatorStats`].
+    fn on_shutdown_stats(
+        &mut self,
+        _active_stats: GpuAllocatorStats,
+        _shutdown_stats: GpuAllocatorStats,
+    ) {
+    }
 }
 
-/// Runs the foundation initialization, event/tick/render loop, and reverse-order
-/// teardown (`Renderer` -> `Window` -> `Platform`) over `backend`.
+/// Synthesizes a minimal, structurally valid `.spnshdr` artifact matching the
+/// `shaders/mesh_3d.slang` reflection layout (`MESH_3D_VS_ARTIFACT` or
+/// `MESH_3D_FS_ARTIFACT`) for headless tests without `slangc`.
+///
+/// # Errors
+///
+/// Returns [`EngineErrorKind::Shader`] (`ENGN-0008`) if `artifact_name` is
+/// unrecognized or encoding fails.
+pub fn synthesize_minimal_mesh_3d_shader(
+    shader_dir: &Path,
+    artifact_name: &str,
+) -> Result<Vec<u8>, EngineError> {
+    let (vs, fs) = match artifact_name {
+        MESH_3D_VS_ARTIFACT => {
+            let shader = minimal_mesh_3d_vertex_cooked_shader();
+            return shader.encode().map_err(|err| {
+                EngineError::new(EngineErrorKind::Shader)
+                    .with_detail(format!("encoding synthetic `{artifact_name}`"))
+                    .with_cause(&err)
+            });
+        }
+        MESH_3D_FS_ARTIFACT => (
+            minimal_mesh_3d_vertex_cooked_shader(),
+            minimal_mesh_3d_fragment_cooked_shader(),
+        ),
+        other => {
+            let full = shader_dir.join(other);
+            return Err(
+                EngineError::new(EngineErrorKind::Shader).with_detail(format!(
+                    "file `{}`: unknown cooked shader artifact `{other}`; {SHADER_COOK_HINT}",
+                    full.display()
+                )),
+            );
+        }
+    };
+
+    validate_graphics_pipeline_shaders(
+        &vs,
+        &fs,
+        &PipelineLayoutDesc {
+            vertex_inputs: &MESH_VERTEX_ATTRIBUTES,
+            push_constants: MESH_PUSH_CONSTANT_RANGE,
+            descriptor_bindings: &[],
+        },
+    )
+    .map_err(|err| {
+        EngineError::new(EngineErrorKind::Shader)
+            .with_detail("validating synthetic mesh_3d shader layout")
+            .with_cause(&err)
+    })?;
+
+    fs.encode().map_err(|err| {
+        EngineError::new(EngineErrorKind::Shader)
+            .with_detail(format!("encoding synthetic `{artifact_name}`"))
+            .with_cause(&err)
+    })
+}
+
+fn minimal_mesh_3d_vertex_cooked_shader() -> CookedShader {
+    let spirv_words = vec![
+        SPIRV_MAGIC,
+        0x0001_0600,
+        0,
+        8,
+        0,
+        (2 << 16) | 17, // OpCapability Shader
+        1,
+        (3 << 16) | 14, // OpMemoryModel Logical GLSL450
+        0,
+        1,
+        (5 << 16) | 15, // OpEntryPoint Vertex %4 "vs_main"
+        0,
+        4,
+        u32::from_le_bytes(*b"vs_m"),
+        u32::from_le_bytes(*b"ain\0"),
+    ];
+    CookedShader {
+        version: SHADER_FORMAT_VERSION,
+        stage: ShaderStage::Vertex,
+        entry_point: "vs_main".to_owned(),
+        push_constants: MESH_PUSH_CONSTANT_RANGE,
+        descriptor_bindings: Vec::new(),
+        vertex_inputs: MESH_VERTEX_ATTRIBUTES.to_vec(),
+        spirv_words,
+    }
+}
+
+fn minimal_mesh_3d_fragment_cooked_shader() -> CookedShader {
+    let spirv_words = vec![
+        SPIRV_MAGIC,
+        0x0001_0600,
+        0,
+        8,
+        0,
+        (2 << 16) | 17, // OpCapability Shader
+        1,
+        (3 << 16) | 14, // OpMemoryModel Logical GLSL450
+        0,
+        1,
+        (5 << 16) | 15, // OpEntryPoint Fragment %4 "fs_main"
+        4,
+        4,
+        u32::from_le_bytes(*b"fs_m"),
+        u32::from_le_bytes(*b"ain\0"),
+    ];
+    CookedShader {
+        version: SHADER_FORMAT_VERSION,
+        stage: ShaderStage::Fragment,
+        entry_point: "fs_main".to_owned(),
+        push_constants: PushConstantRange::NONE,
+        descriptor_bindings: Vec::new(),
+        vertex_inputs: Vec::new(),
+        spirv_words,
+    }
+}
+
+#[derive(Default)]
+struct SceneGpuHandles {
+    shaders: Vec<ShaderHandle>,
+    pipeline: Option<PipelineHandle>,
+    meshes: Vec<MeshHandle>,
+}
+
+/// Runs initialization, the 60 Hz `FreeCamera` + `alpha`-interpolated 3D scene
+/// loop, and strict reverse-order teardown
+/// (`MeshHandles (rev) -> PipelineHandle -> ShaderHandles (rev) -> Renderer -> Window -> Platform`)
+/// over `backend`.
 ///
 /// # Errors
 ///
 /// Returns a typed [`EngineError`] if option validation, subsystem startup,
-/// event pumping, clock advancement, rendering, or graphics validation fails.
-/// Every resource initialized prior to a failure is dropped in reverse
-/// initialization order before returning (`FND-FR-10`, `FND-INV-04`).
+/// cooked-shader loading/validation, pipeline/mesh initialization, event
+/// pumping, clock advancement, rendering, or graphics validation fails. Every
+/// resource initialized prior to a failure is released once in exact reverse
+/// ownership order before returning (`FND-FR-10`, `F3D-FR-12`).
 pub fn run_session<B: RuntimeBackend>(
     options: &RuntimeOptions,
     backend: &mut B,
@@ -207,9 +552,12 @@ pub fn run_session<B: RuntimeBackend>(
                 .with_cause(&err)
         })?
         .with_app_id(options.app_id.clone());
+    validate_shader_dir_path(&options.shader_dir)?;
 
-    let (mut input, exit_action) = build_development_input()?;
+    let mut camera = FreeCamera::new(options.camera)?;
+    let (mut input, bindings) = CameraInputBindings::build_default_input()?;
     let mut clock = FixedStepClock::new(options.fixed_step);
+    let scene = ProceduralScene::default_scene()?;
 
     let mut platform = backend.create_platform()?;
     let (window, initial_size) = backend.create_window(&mut platform, &window_descriptor)?;
@@ -226,20 +574,28 @@ pub fn run_session<B: RuntimeBackend>(
             SurfaceSize::new(initial_size.width, initial_size.height),
             &render_descriptor,
         )?;
-        // Anchor monotonic clock after platform, window, and renderer startup
-        // so initialization latency is not treated as a simulation stall.
-        let _ = backend.read_elapsed();
 
-        let loop_result = drive_loop(
+        let mut gpu_handles = SceneGpuHandles::default();
+        let session_result = init_and_drive_scene(
             options,
             backend,
             &mut platform,
             window_id,
+            initial_size,
             &mut renderer,
+            &mut gpu_handles,
+            &scene,
             &mut clock,
             &mut input,
-            exit_action,
+            &bindings,
+            &mut camera,
         );
+
+        let active_stats = renderer.allocator_stats();
+
+        // Explicit reverse-order teardown Steps 1..3:
+        // uploaded MeshHandles (reverse) -> PipelineHandle -> ShaderHandles (reverse).
+        let handle_teardown_err = teardown_scene_handles(&mut renderer, &mut gpu_handles);
 
         let mut trailing_messages = Vec::new();
         let dropped_messages = renderer.drain_validation_messages(&mut trailing_messages);
@@ -248,21 +604,38 @@ pub fn run_session<B: RuntimeBackend>(
         }
         let validation_errors = renderer.validation_error_count();
 
-        // Explicit reverse-order teardown Step 1: GPU/surface resources before
-        // the borrowed window.
-        drop(renderer);
+        // Explicit reverse-order teardown Step 4: close/drop Renderer before
+        // the borrowed Window.
+        let close_result = renderer.close();
 
-        match loop_result {
-            Err(error) => Err(error),
+        match session_result {
+            Err(primary_error) => Err(primary_error),
+            Ok(_) if handle_teardown_err.is_some() => {
+                if let Some(err) = handle_teardown_err {
+                    Err(err)
+                } else {
+                    Err(EngineError::new(EngineErrorKind::Render))
+                }
+            }
+            Ok(_) if close_result.is_err() => match close_result {
+                Err(err) => Err(err),
+                Ok(_) => Err(EngineError::new(EngineErrorKind::Render)),
+            },
             Ok(_) if validation_errors > 0 => Err(EngineError::new(EngineErrorKind::Validation)
                 .with_detail(format!(
                     "graphics validation layer reported {validation_errors} error(s)"
                 ))),
-            Ok(summary) => Ok(summary),
+            Ok(mut summary) => {
+                let shutdown_stats = close_result.unwrap_or_default();
+                summary.active_allocator_stats = active_stats;
+                summary.shutdown_allocator_stats = shutdown_stats;
+                backend.on_shutdown_stats(active_stats, shutdown_stats);
+                Ok(summary)
+            }
         }
     };
 
-    // Explicit reverse-order teardown Steps 2 & 3: native window, then platform
+    // Explicit reverse-order teardown Steps 5 & 6: native Window, then Platform
     // display connection.
     drop(input);
     drop(window);
@@ -272,19 +645,134 @@ pub fn run_session<B: RuntimeBackend>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn init_and_drive_scene<B: RuntimeBackend>(
+    options: &RuntimeOptions,
+    backend: &mut B,
+    platform: &mut B::Platform,
+    window_id: WindowId,
+    initial_size: PhysicalSize,
+    renderer: &mut B::Renderer<'_>,
+    gpu_handles: &mut SceneGpuHandles,
+    scene: &ProceduralScene,
+    clock: &mut FixedStepClock,
+    input: &mut InputState,
+    bindings: &CameraInputBindings,
+    camera: &mut FreeCamera,
+) -> Result<SessionSummary, EngineError> {
+    let vs_bytes = backend.read_cooked_shader(&options.shader_dir, MESH_3D_VS_ARTIFACT)?;
+    let vs_label = options
+        .shader_dir
+        .join(MESH_3D_VS_ARTIFACT)
+        .to_string_lossy()
+        .into_owned();
+    let vs_handle = renderer.load_shader(&vs_label, &vs_bytes)?;
+    gpu_handles.shaders.push(vs_handle);
+
+    let fs_bytes = backend.read_cooked_shader(&options.shader_dir, MESH_3D_FS_ARTIFACT)?;
+    let fs_label = options
+        .shader_dir
+        .join(MESH_3D_FS_ARTIFACT)
+        .to_string_lossy()
+        .into_owned();
+    let fs_handle = renderer.load_shader(&fs_label, &fs_bytes)?;
+    gpu_handles.shaders.push(fs_handle);
+
+    let pipeline_desc = GraphicsPipelineDescriptor::new_mesh_3d("mesh_3d", vs_handle, fs_handle);
+    let pipeline_handle = renderer.create_graphics_pipeline(&pipeline_desc)?;
+    gpu_handles.pipeline = Some(pipeline_handle);
+
+    gpu_handles.meshes.reserve(scene.meshes().len());
+    for mesh_asset in scene.meshes() {
+        let handle = renderer.upload_mesh(&mesh_asset.descriptor())?;
+        gpu_handles.meshes.push(handle);
+    }
+
+    backend.on_scene_initialized(
+        gpu_handles.meshes.len(),
+        scene.instances().len(),
+        renderer.allocator_stats(),
+    );
+
+    // Anchor monotonic clock after platform, window, renderer, shader, pipeline,
+    // and mesh initialization so startup latency is never treated as a stall.
+    let _ = backend.read_elapsed();
+
+    drive_loop(
+        options,
+        backend,
+        platform,
+        window_id,
+        initial_size,
+        renderer,
+        pipeline_handle,
+        &gpu_handles.meshes,
+        scene,
+        clock,
+        input,
+        bindings,
+        camera,
+    )
+}
+
+fn teardown_scene_handles<R: RenderSurface>(
+    renderer: &mut R,
+    gpu_handles: &mut SceneGpuHandles,
+) -> Option<EngineError> {
+    let mut first_error: Option<EngineError> = None;
+
+    for mesh in gpu_handles.meshes.drain(..).rev() {
+        if let Err(err) = renderer.destroy_mesh(mesh)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+    }
+
+    if let Some(pipeline) = gpu_handles.pipeline.take()
+        && let Err(err) = renderer.destroy_pipeline(pipeline)
+        && first_error.is_none()
+    {
+        first_error = Some(err);
+    }
+
+    for shader in gpu_handles.shaders.drain(..).rev() {
+        if let Err(err) = renderer.destroy_shader(shader)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+    }
+
+    first_error
+}
+
+#[allow(clippy::too_many_arguments)]
 fn drive_loop<B: RuntimeBackend>(
     options: &RuntimeOptions,
     backend: &mut B,
     platform: &mut B::Platform,
     window_id: WindowId,
+    initial_size: PhysicalSize,
     renderer: &mut B::Renderer<'_>,
+    pipeline: PipelineHandle,
+    mesh_handles: &[MeshHandle],
+    scene: &ProceduralScene,
     clock: &mut FixedStepClock,
     input: &mut InputState,
-    exit_action: ActionId,
+    bindings: &CameraInputBindings,
+    camera: &mut FreeCamera,
 ) -> Result<SessionSummary, EngineError> {
+    let mut cursor_grab = CursorGrabMode::None;
     if let Some(mode) = options.smoke_cursor_grab {
         backend.set_cursor_grab(platform, window_id, mode)?;
+        cursor_grab = mode;
     }
+
+    let mut last_valid_aspect = if !initial_size.is_empty() {
+        (initial_size.width as f32) / (initial_size.height as f32)
+    } else {
+        (options.window_size.width as f32) / (options.window_size.height as f32)
+    };
 
     let mut summary = SessionSummary {
         exit_reason: ExitReason::CloseRequested,
@@ -296,6 +784,9 @@ fn drive_loop<B: RuntimeBackend>(
         frames_suspended: 0,
         frames_skipped: 0,
         close_requests: 0,
+        final_cursor_grab: cursor_grab,
+        active_allocator_stats: GpuAllocatorStats::default(),
+        shutdown_allocator_stats: GpuAllocatorStats::default(),
     };
 
     let mut total_elapsed = Duration::ZERO;
@@ -306,6 +797,7 @@ fn drive_loop<B: RuntimeBackend>(
     let mut idle = renderer.state() == PresentationState::Suspended;
     let mut exit_reason: Option<ExitReason> = None;
     let mut events = Vec::new();
+    let mut draws = Vec::with_capacity(scene.instances().len());
     let mut validation_messages = Vec::new();
 
     loop {
@@ -328,9 +820,31 @@ fn drive_loop<B: RuntimeBackend>(
                         }
                         WindowEvent::Resized(size) => {
                             renderer.resize(SurfaceSize::new(size.width, size.height));
+                            if !size.is_empty() {
+                                last_valid_aspect = (size.width as f32) / (size.height as f32);
+                            }
                         }
                         WindowEvent::Occluded(hidden) => {
                             occluded = *hidden;
+                        }
+                        WindowEvent::Focused(false) => {
+                            if cursor_grab != CursorGrabMode::None {
+                                cursor_grab = CursorGrabMode::None;
+                                if let Err(err) = backend.set_cursor_grab(
+                                    platform,
+                                    window_id,
+                                    CursorGrabMode::None,
+                                ) {
+                                    if err.is_recoverable_cursor_grab() {
+                                        backend.on_cursor_grab_unavailable(&err);
+                                    } else {
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::CursorGrabChanged(mode) => {
+                            cursor_grab = *mode;
                         }
                         _ => {}
                     }
@@ -351,23 +865,60 @@ fn drive_loop<B: RuntimeBackend>(
             summary.backlog_drop_count += 1;
             backend.on_backlog_dropped(update.dropped());
         }
+
+        let tick_duration = clock.config().tick_duration();
         for tick in update.ticks() {
             let command = input.sample_tick(tick);
             summary.ticks_executed += 1;
             summary.last_tick = Some(tick);
             backend.on_tick(&command);
-            if command.is_pressed(exit_action) {
+
+            let was_locked = cursor_grab == CursorGrabMode::Locked;
+            if command.is_pressed(bindings.toggle_cursor_grab) {
+                let target_mode = if was_locked {
+                    CursorGrabMode::None
+                } else {
+                    CursorGrabMode::Locked
+                };
+                match backend.set_cursor_grab(platform, window_id, target_mode) {
+                    Ok(()) => {
+                        cursor_grab = target_mode;
+                    }
+                    Err(err) if err.is_recoverable_cursor_grab() => {
+                        cursor_grab = CursorGrabMode::None;
+                        backend.on_cursor_grab_unavailable(&err);
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+
+            let look_enabled = was_locked && cursor_grab == CursorGrabMode::Locked;
+            let cam_input = bindings.sample_camera_input(&command, look_enabled);
+            camera.step_tick(tick, tick_duration, cam_input);
+            backend.on_camera_tick(tick, camera.curr_pose(), cursor_grab);
+
+            if command.is_pressed(bindings.exit) {
                 exit_reason.get_or_insert(ExitReason::ExitAction);
             }
         }
 
         if let Some(reason) = exit_reason {
             summary.exit_reason = reason;
+            summary.final_cursor_grab = cursor_grab;
             break;
         }
 
         if !occluded {
-            match renderer.render_clear(options.clear_color)? {
+            let alpha = interpolation_alpha(clock);
+            let presentation = camera.sample_presentation(alpha, last_valid_aspect)?;
+            scene.extract_draws(mesh_handles, &presentation, &mut draws)?;
+
+            match renderer.render_meshes(
+                pipeline,
+                options.clear_color,
+                &presentation.view,
+                &draws,
+            )? {
                 FrameOutcome::Presented => {
                     summary.frames_presented += 1;
                     idle = false;
@@ -405,6 +956,7 @@ fn drive_loop<B: RuntimeBackend>(
                 .is_some_and(|limit| total_elapsed >= limit / 2)
         {
             backend.set_cursor_grab(platform, window_id, CursorGrabMode::None)?;
+            cursor_grab = CursorGrabMode::None;
             smoke_grab_released = true;
         }
 
@@ -413,6 +965,7 @@ fn drive_loop<B: RuntimeBackend>(
             .is_some_and(|limit| total_elapsed >= limit)
         {
             summary.exit_reason = ExitReason::AutoClose;
+            summary.final_cursor_grab = cursor_grab;
             break;
         }
     }
@@ -420,21 +973,31 @@ fn drive_loop<B: RuntimeBackend>(
     Ok(summary)
 }
 
-/// Binds the development-only `Escape` exit intent owned by the composition
-/// root (`docs/foundation/DESIGN.md` Event and focus policy). `spawn-input`
-/// itself stays completely free of default actions.
-fn build_development_input() -> Result<(InputState, ActionId), EngineError> {
-    let exit_action = ActionId::new(0).map_err(|err| {
-        EngineError::new(EngineErrorKind::Input)
-            .with_detail("allocating composition exit action")
-            .with_cause(&err)
-    })?;
-    let mut map = InputMap::new();
-    map.bind_action(exit_action, ButtonTrigger::Key(KeyCode::Escape))
-        .map_err(|err| {
-            EngineError::new(EngineErrorKind::Input)
-                .with_detail("binding Escape to composition exit action")
-                .with_cause(&err)
-        })?;
-    Ok((InputState::with_map(map), exit_action))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthesized_minimal_mesh_shaders_decode_and_match_mesh_3d_pipeline_layout() {
+        let dir = Path::new("target/shaders");
+        let vs_bytes = synthesize_minimal_mesh_3d_shader(dir, MESH_3D_VS_ARTIFACT).unwrap();
+        let fs_bytes = synthesize_minimal_mesh_3d_shader(dir, MESH_3D_FS_ARTIFACT).unwrap();
+
+        let vs = CookedShader::decode_named(MESH_3D_VS_ARTIFACT, &vs_bytes).unwrap();
+        let fs = CookedShader::decode_named(MESH_3D_FS_ARTIFACT, &fs_bytes).unwrap();
+        validate_graphics_pipeline_shaders(
+            &vs,
+            &fs,
+            &PipelineLayoutDesc {
+                vertex_inputs: &MESH_VERTEX_ATTRIBUTES,
+                push_constants: MESH_PUSH_CONSTANT_RANGE,
+                descriptor_bindings: &[],
+            },
+        )
+        .unwrap();
+
+        let err = synthesize_minimal_mesh_3d_shader(dir, "unknown.spnshdr").unwrap_err();
+        assert_eq!(err.kind(), EngineErrorKind::Shader);
+        assert_eq!(err.code(), "ENGN-0008");
+    }
 }
