@@ -1,6 +1,6 @@
 # Milestone 2 Invariants — First 3D and Camera
 
-**Status:** `PLANNED` normative invariants for Milestone 2, derived from [Engine Invariants](../architecture/INVARIANTS.md) (`SPN-INV-*`) and [Foundation Invariants](../foundation/INVARIANTS.md) (`FND-INV-*`). Items marked **proposal** depend on *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) and become binding engine-wide once accepted; until then, no contradictory design may be implemented.
+**Status:** `EXISTS` normative invariants for Milestone 2, derived from [Engine Invariants](../architecture/INVARIANTS.md) (`SPN-INV-*`) and [Foundation Invariants](../foundation/INVARIANTS.md) (`FND-INV-*`) and verified on Linux/Wayland + Vulkan 1.3. Items marked **proposal** depend on *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) and become binding engine-wide once accepted; until then, no contradictory design may be implemented.
 
 Each invariant carries a stable ID, its upstream `SPN-INV` source(s), and a concrete verification hook in [VERIFICATION.md](VERIFICATION.md).
 

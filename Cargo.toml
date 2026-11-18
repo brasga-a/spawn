@@ -59,8 +59,13 @@ workspace = true
 [dependencies]
 spawn-core = { version = "0.1.0", path = "crates/spawn-core", default-features = false }
 spawn-input = { version = "0.1.0", path = "crates/spawn-input", default-features = false }
+spawn-math = { version = "0.1.0", path = "crates/spawn-math", default-features = false }
 spawn-platform = { version = "0.1.0", path = "crates/spawn-platform", default-features = false }
 spawn-render = { version = "0.1.0", path = "crates/spawn-render", default-features = false }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true, features = ["std"] }
 
 # Native Linux runtime backends (Wayland + Vulkan 1.3). Kept target-conditional
 # so workspace checks and headless verification tests on targets without a

@@ -428,8 +428,11 @@ version = "0.1.0"
 name = "spawn-engine"
 version = "0.1.0"
 dependencies = [
+ "insta",
+ "proptest",
  "spawn-core",
  "spawn-input",
+ "spawn-math",
  "spawn-platform",
  "spawn-render",
 ]

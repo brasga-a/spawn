@@ -33,12 +33,12 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | yes (`spawn-math`, `spawn-render`, `spawn-cli` dev-deps) |
+| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | yes (`spawn-math`, `spawn-render`, `spawn-cli`, `spawn-engine` dev-deps) |
 | `cargo-fuzz` | MIT/Apache-2.0 | test | parsers (packets, RON, glTF, cooked assets, packages) | Fuzzing | yes (`crates/spawn-render/fuzz`, excluded standalone fuzz package) |
 | `arbitrary` | MIT/Apache-2.0 | test | parsers | Structured fuzz inputs | yes (`spawn-render` dev-deps and `crates/spawn-render/fuzz`) |
 | `loom` | MIT | test | `spawn-jobs`, lock-free code | Concurrency model checking | no |
 | `criterion` or `divan` (choose one) | MIT/Apache-2.0 | test | all crates | Benchmarks on the reference hardware | no |
-| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | yes (`spawn-math`, `spawn-render`, `spawn-cli` dev-deps) |
+| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | yes (`spawn-math`, `spawn-render`, `spawn-cli`, `spawn-engine` dev-deps) |
 | `cargo-nextest` | MIT/Apache-2.0 | tool | CI, local | Faster test runner | no |
 
 ## Profiling and diagnostics
