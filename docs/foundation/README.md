@@ -1,7 +1,7 @@
 # Foundation Milestone — First Running Frame
 
 **Milestone:** Spawn Foundation / first native runtime slice  
-**Status:** in progress: phase 1 (`spawn-core` clock) and phase 4 (`spawn-input` device state, mappings, tick sampling) implemented and validated; phase 2 (`spawn-platform`, Wayland backend) and phase 2b (relative pointer motion, cursor lock/confinement) implemented with headless tests and Hyprland smoke runs, validation pending (manual compositor-close test); phase 3 (`spawn-render` Vulkan clear frame) implemented and verified clean under `VK_LAYER_KHRONOS_validation` (including sync validation), validation pending (manual drag resize and hide/minimize); phases 5–6 PLANNED ([plan](PLAN.md)). The milestone is not complete  
+**Status:** `EXISTS` on Linux/Wayland (Hyprland + Vulkan 1.3): phases 0–6 (`spawn-core` clock, `spawn-platform` Wayland + Phase 2b relative motion/cursor constraints, `spawn-render` Vulkan 1.3 clear frame verified clean under `VK_LAYER_KHRONOS_validation` + sync validation, `spawn-input` device state/semantic mappings/tick sampling, and root `spawn-engine` composition with automated `FND-T01..T10` and recorded Hyprland smoke runs including compositor close). X11 and Windows backends remain `PLANNED`; untested interactive window cases are listed in [VERIFICATION.md](VERIFICATION.md#exit-gate)  
 **Target:** A small generic executable that creates a window, polls events, updates a bounded fixed-step simulation clock, presents a clear frame, handles input and resize, and exits cleanly.
 
 The first demonstrated frame can be a solid clear color; triangle, mesh, camera, gameplay, and editor UI are subsequent work.

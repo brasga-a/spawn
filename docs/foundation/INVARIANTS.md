@@ -1,6 +1,6 @@
 # Foundation Invariants
 
-**Status:** normative requirements for the foundation milestone. Subsystem invariants for Phases 1–4 (`spawn-core`, `spawn-platform` including 2b, `spawn-render`, `spawn-input`) are verified by automated tests (`FND-T01..T07`, platform `FND-T10`; see [VERIFICATION.md](VERIFICATION.md)); composition-root verification (`FND-T08`, `FND-T09`, full `FND-T10`) belongs to Phase 5 (`PLANNED`).
+**Status:** normative requirements for the foundation milestone, verified across automated tests `FND-T01..T10` (`crates/*/tests/`, `tests/foundation_verification.rs`) and recorded Linux/Wayland + Khronos validation smoke runs ([VERIFICATION.md](VERIFICATION.md)).
 
 Each invariant has an ID and an intended verification approach. A change that weakens one requires explicit review and corresponding test/document updates.
 
