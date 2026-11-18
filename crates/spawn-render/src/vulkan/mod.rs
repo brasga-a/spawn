@@ -50,7 +50,7 @@ use device::DeviceOwner;
 use frame::{Frames, OffscreenPassTarget, PassDraw, SwapchainPassTarget};
 use instance::InstanceOwner;
 use memory::{VulkanBuffer, VulkanImage, VulkanMemoryAllocator};
-use mesh::{GpuMeshPushConstants, PreparedMeshDraw, UploadedMesh, prepare_mesh_staging_upload};
+use mesh::{PreparedMeshDraw, UploadedMesh, prepare_mesh_draws_into, prepare_mesh_staging_upload};
 use pipeline::{CompiledPipeline, LoadedShader, OffscreenTarget};
 use surface::SurfaceOwner;
 pub(crate) use surface::SurfaceSource;
@@ -97,6 +97,46 @@ impl VkFailure {
     }
 }
 
+/// Draw workload passed internally before resolving `&self.prepared_draws`.
+#[derive(Clone, Copy)]
+enum PendingPassDraw {
+    None,
+    Unindexed {
+        pipeline: vk::Pipeline,
+        vertex_count: u32,
+    },
+    PreparedIndexedMeshes {
+        pipeline: vk::Pipeline,
+        layout: vk::PipelineLayout,
+        push_stage_flags: vk::ShaderStageFlags,
+    },
+}
+
+impl PendingPassDraw {
+    fn into_pass_draw(self, prepared_draws: &[PreparedMeshDraw]) -> PassDraw<'_> {
+        match self {
+            Self::None => PassDraw::None,
+            Self::Unindexed {
+                pipeline,
+                vertex_count,
+            } => PassDraw::Unindexed {
+                pipeline,
+                vertex_count,
+            },
+            Self::PreparedIndexedMeshes {
+                pipeline,
+                layout,
+                push_stage_flags,
+            } => PassDraw::IndexedMeshes {
+                pipeline,
+                layout,
+                push_stage_flags,
+                draws: prepared_draws,
+            },
+        }
+    }
+}
+
 /// The Vulkan renderer: one surface, one device, one queue, one swapchain,
 /// one swapchain-matched `D32_SFLOAT` reversed-Z depth attachment, and the
 /// in-house GPU block suballocator.
@@ -110,6 +150,8 @@ pub(crate) struct VulkanRenderer {
     /// Code of the error that stopped the renderer, for later calls.
     fatal_code: Option<&'static str>,
     torn_down: bool,
+    /// Reusable scratch buffer for prepared indexed mesh draws (avoids per-frame allocation).
+    prepared_draws: Vec<PreparedMeshDraw>,
     offscreen_targets: GenerationalPool<OffscreenTargetHandle, OffscreenTarget>,
     meshes: GenerationalPool<MeshHandle, UploadedMesh>,
     pipelines: GenerationalPool<PipelineHandle, CompiledPipeline>,
@@ -147,6 +189,7 @@ impl VulkanRenderer {
             info,
             fatal_code: None,
             torn_down: false,
+            prepared_draws: Vec::new(),
             offscreen_targets: GenerationalPool::new(),
             meshes: GenerationalPool::new(),
             pipelines: GenerationalPool::new(),
@@ -320,7 +363,20 @@ impl VulkanRenderer {
                 err
             }
         })?;
-        self.pipelines.insert(compiled)
+        match self.pipelines.try_insert(compiled) {
+            Ok(handle) => Ok(handle),
+            Err((compiled, error)) => {
+                let completed = self.frames.completed_timeline(&self.device).unwrap_or(0);
+                self.allocator.retire_pipeline(
+                    &self.device,
+                    compiled.pipeline,
+                    compiled.layout,
+                    completed,
+                    self.frames.last_submitted(),
+                );
+                Err(error)
+            }
+        }
     }
 
     /// Destroys a graphics pipeline handle (`REND-0013` if stale or forged),
@@ -359,7 +415,20 @@ impl VulkanRenderer {
                     err
                 }
             })?;
-        self.offscreen_targets.insert(target)
+        match self.offscreen_targets.try_insert(target) {
+            Ok(handle) => Ok(handle),
+            Err((target, error)) => {
+                let completed = self.frames.completed_timeline(&self.device).unwrap_or(0);
+                let last_sub = self.frames.last_submitted();
+                let _ =
+                    self.allocator
+                        .retire_image(&self.device, target.depth, completed, last_sub);
+                let _ =
+                    self.allocator
+                        .retire_image(&self.device, target.color, completed, last_sub);
+                Err(error)
+            }
+        }
     }
 
     /// Destroys an offscreen render target handle (`REND-0013` if stale or forged),
@@ -442,19 +511,23 @@ impl VulkanRenderer {
             upload_timeline,
         );
 
-        let UploadedMesh {
-            vertex_buffer,
-            index_buffer,
-            index_count,
-        } = staged.mesh;
-        match self.meshes.insert(UploadedMesh {
-            vertex_buffer,
-            index_buffer,
-            index_count,
-        }) {
+        match self.meshes.try_insert(staged.mesh) {
             Ok(handle) => Ok(handle),
-            Err(error) => {
-                // Unreachable unless handle generations saturate, handled cleanly.
+            Err((mesh, error)) => {
+                // Roll back both DEVICE_LOCAL buffers on the same upload timeline
+                // so no GPU memory or VkBuffer leaks even if pool insertion fails.
+                let _ = self.allocator.retire_buffer(
+                    &self.device,
+                    mesh.index_buffer,
+                    completed,
+                    upload_timeline,
+                );
+                let _ = self.allocator.retire_buffer(
+                    &self.device,
+                    mesh.vertex_buffer,
+                    completed,
+                    upload_timeline,
+                );
                 Err(error)
             }
         }
@@ -479,7 +552,7 @@ impl VulkanRenderer {
     /// Clears the next swapchain image to `color` (and its `D32_SFLOAT` depth to `0.0`)
     /// and presents it.
     pub(crate) fn render_clear(&mut self, color: ClearColor) -> Result<FrameOutcome, RenderError> {
-        self.render_swapchain_internal(color, PassDraw::None, None)
+        self.render_swapchain_internal(color, PendingPassDraw::None, None)
     }
 
     /// Clears the next swapchain image to `clear_color` and `D32_SFLOAT` depth to `0.0`,
@@ -510,7 +583,7 @@ impl VulkanRenderer {
         };
         self.render_swapchain_internal(
             clear_color,
-            PassDraw::Unindexed {
+            PendingPassDraw::Unindexed {
                 pipeline: vk_pipeline,
                 vertex_count,
             },
@@ -532,14 +605,13 @@ impl VulkanRenderer {
         self.ensure_not_stopped()?;
         let (vk_pipeline, vk_layout, push_stage_flags, expected_format) =
             self.validate_mesh_pipeline(pipeline, PipelineTarget::Swapchain, "render_meshes")?;
-        let prepared = self.prepare_mesh_draws(view, draws)?;
+        prepare_mesh_draws_into(&self.meshes, &mut self.prepared_draws, view, draws)?;
         self.render_swapchain_internal(
             clear_color,
-            PassDraw::IndexedMeshes {
+            PendingPassDraw::PreparedIndexedMeshes {
                 pipeline: vk_pipeline,
                 layout: vk_layout,
                 push_stage_flags,
-                draws: &prepared,
             },
             Some(expected_format),
         )
@@ -572,7 +644,7 @@ impl VulkanRenderer {
         self.execute_offscreen_pass(
             target,
             clear_color,
-            PassDraw::Unindexed {
+            PendingPassDraw::Unindexed {
                 pipeline: vk_pipeline,
                 vertex_count,
             },
@@ -598,15 +670,14 @@ impl VulkanRenderer {
             PipelineTarget::OffscreenRgba8Unorm,
             "render_offscreen_meshes",
         )?;
-        let prepared = self.prepare_mesh_draws(view, draws)?;
+        prepare_mesh_draws_into(&self.meshes, &mut self.prepared_draws, view, draws)?;
         self.execute_offscreen_pass(
             target,
             clear_color,
-            PassDraw::IndexedMeshes {
+            PendingPassDraw::PreparedIndexedMeshes {
                 pipeline: vk_pipeline,
                 layout: vk_layout,
                 push_stage_flags,
-                draws: &prepared,
             },
         )
     }
@@ -654,35 +725,11 @@ impl VulkanRenderer {
     }
 
     #[track_caller]
-    fn prepare_mesh_draws(
-        &self,
-        view: &CameraRelativeView,
-        draws: &[MeshDraw],
-    ) -> Result<Vec<PreparedMeshDraw>, RenderError> {
-        if !view.projection.is_finite() || !view.camera_rotation.is_finite() {
-            return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
-                .with_detail("CameraRelativeView contains NaN or infinite values"));
-        }
-        let mut prepared = Vec::with_capacity(draws.len());
-        for draw in draws {
-            let uploaded = self.meshes.get(draw.mesh)?;
-            let packed = draw.pack_push_constants(view)?;
-            prepared.push(PreparedMeshDraw {
-                vertex_buffer: uploaded.vertex_buffer.handle,
-                index_buffer: uploaded.index_buffer.handle,
-                index_count: uploaded.index_count,
-                push_constants: GpuMeshPushConstants::from_packed(&packed),
-            });
-        }
-        Ok(prepared)
-    }
-
-    #[track_caller]
     fn execute_offscreen_pass(
         &mut self,
         target: OffscreenTargetHandle,
         clear_color: ClearColor,
-        draw: PassDraw<'_>,
+        draw: PendingPassDraw,
     ) -> Result<OffscreenReadback, RenderError> {
         let (extent, color_image, color_view, depth_image, depth_view) = {
             let offscreen = self.offscreen_targets.get(target)?;
@@ -731,9 +778,10 @@ impl VulkanRenderer {
             readback_bytes: byte_len_u64,
         };
 
+        let pass_draw = draw.into_pass_draw(&self.prepared_draws);
         let submit_res =
             self.frames
-                .execute_offscreen_draw_and_copy(&self.device, &pass_target, draw);
+                .execute_offscreen_draw_and_copy(&self.device, &pass_target, pass_draw);
 
         let signaled_value = match submit_res {
             Ok(val) => val,
@@ -769,7 +817,7 @@ impl VulkanRenderer {
     fn render_swapchain_internal(
         &mut self,
         color: ClearColor,
-        draw: PassDraw<'_>,
+        draw: PendingPassDraw,
         expected_format: Option<vk::Format>,
     ) -> Result<FrameOutcome, RenderError> {
         let Some(plan) = self.controller.plan() else {
@@ -795,7 +843,7 @@ impl VulkanRenderer {
     fn draw_swapchain(
         &mut self,
         color: ClearColor,
-        draw: PassDraw<'_>,
+        draw: PendingPassDraw,
         expected_format: Option<vk::Format>,
     ) -> Result<FrameOutcome, RenderError> {
         let ticket = self
@@ -885,9 +933,10 @@ impl VulkanRenderer {
             extent,
             clear_color,
         };
+        let pass_draw = draw.into_pass_draw(&self.prepared_draws);
         let recorded = self
             .frames
-            .record_swapchain_pass(&self.device, &ticket, &pass_target, draw)
+            .record_swapchain_pass(&self.device, &ticket, &pass_target, pass_draw)
             .and_then(|()| self.frames.submit(&self.device, ticket, present));
         recorded.map_err(|error| self.fatal(error))?;
 
@@ -1357,5 +1406,141 @@ mod gpu_tests {
             }
             assert_no_validation_errors(&renderer);
         }
+    }
+
+    #[test]
+    #[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
+    fn upload_mesh_insert_failure_retires_gpu_buffers_with_zero_leaks() {
+        let descriptor = RendererDescriptor {
+            present_mode: PresentModePreference::Fifo,
+            validation: Validation::Required,
+        };
+        let mut renderer = VulkanRenderer::new(
+            SurfaceSource::Headless,
+            SurfaceSize::new(0, 0),
+            &descriptor,
+            GpuMemoryBudget::default(),
+        )
+        .expect("headless Vulkan 1.3 renderer with required validation");
+        assert!(renderer.info().validation_enabled);
+
+        let verts = [
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(-1.0, -1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(1.0, -1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(0.0, 1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+        ];
+        let indices = [0_u32, 1, 2];
+
+        renderer.meshes.inject_insert_failure();
+        let err = renderer
+            .upload_mesh(&MeshDescriptor::new("rollback_tri", &verts, &indices))
+            .unwrap_err();
+        assert_eq!(err.kind(), RenderErrorKind::GpuMemoryExhausted);
+        assert_eq!(err.code(), "REND-0012");
+
+        // Buffers were immediately retired on error, not leaked as live allocations.
+        let immediate_stats = renderer.allocator_stats();
+        assert_eq!(immediate_stats.live_allocations, 0);
+        assert_eq!(immediate_stats.live_allocated_bytes, 0);
+
+        // Waiting and reclaiming frees both the rolled-back vertex/index buffers and staging buffer.
+        let reclaimed = renderer.wait_idle_and_reclaim().unwrap();
+        assert_eq!(reclaimed.live_allocations, 0);
+        assert_eq!(reclaimed.live_allocated_bytes, 0);
+        assert_eq!(reclaimed.retired_allocations, 0);
+        assert_eq!(reclaimed.retired_bytes, 0);
+
+        assert_no_validation_errors(&renderer);
+        let closed = renderer.close().unwrap();
+        assert_eq!(closed.block_count, 0);
+        assert_eq!(closed.live_allocations, 0);
+        assert_eq!(closed.retired_allocations, 0);
+    }
+
+    #[test]
+    #[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
+    fn render_meshes_reuses_prepared_draw_scratch_across_frames_without_reallocating() {
+        let descriptor = RendererDescriptor {
+            present_mode: PresentModePreference::Fifo,
+            validation: Validation::Required,
+        };
+        let mut renderer = VulkanRenderer::new(
+            SurfaceSource::Headless,
+            SurfaceSize::new(0, 0),
+            &descriptor,
+            GpuMemoryBudget::default(),
+        )
+        .expect("headless Vulkan 1.3 renderer with required validation");
+        assert!(renderer.info().validation_enabled);
+
+        let proj = spawn_math::Mat4::perspective_reversed_z_rh(1.2, 1.0, 0.1, 100.0).unwrap();
+        let view = CameraRelativeView::new(proj, spawn_math::Quat::IDENTITY);
+        let verts = [
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(-1.0, -1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(1.0, -1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+            crate::mesh::MeshVertex::new(
+                spawn_math::Vec3::new(0.0, 1.0, 0.0),
+                spawn_math::Vec3::Z,
+                spawn_math::Vec4::ONE,
+            ),
+        ];
+        let indices = [0_u32, 1, 2];
+        let mesh = renderer
+            .upload_mesh(&MeshDescriptor::new("scratch_tri", &verts, &indices))
+            .unwrap();
+        let draws: Vec<MeshDraw> = (0..4)
+            .map(|i| MeshDraw::new(mesh, spawn_math::Vec3::new(i as f32, 0.0, -3.0)))
+            .collect();
+
+        prepare_mesh_draws_into(
+            &renderer.meshes,
+            &mut renderer.prepared_draws,
+            &view,
+            &draws,
+        )
+        .unwrap();
+        let cap = renderer.prepared_draws.capacity();
+        let ptr = renderer.prepared_draws.as_ptr();
+        assert!(cap >= 4);
+
+        for count in [1_usize, 4, 2, 4] {
+            prepare_mesh_draws_into(
+                &renderer.meshes,
+                &mut renderer.prepared_draws,
+                &view,
+                &draws[..count],
+            )
+            .unwrap();
+            assert_eq!(renderer.prepared_draws.len(), count);
+            assert_eq!(renderer.prepared_draws.capacity(), cap);
+            assert_eq!(renderer.prepared_draws.as_ptr(), ptr);
+        }
+
+        renderer.destroy_mesh(mesh).unwrap();
+        assert_no_validation_errors(&renderer);
+        let closed = renderer.close().unwrap();
+        assert_eq!(closed.block_count, 0);
+        assert_eq!(closed.live_allocations, 0);
+        assert_eq!(closed.retired_allocations, 0);
     }
 }

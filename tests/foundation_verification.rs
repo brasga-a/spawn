@@ -801,19 +801,7 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
     }
 
     // Engine crates never depend on root `spawn-engine` or any `tools/*` crate (SPN-INV-001).
-    for crate_name in &engine_crates {
-        let deps = &edges[crate_name];
-        assert!(
-            !deps.contains("spawn-engine"),
-            "{crate_name} must not depend on composition root spawn-engine"
-        );
-        for tool in &tool_crates {
-            assert!(
-                !deps.contains(tool),
-                "{crate_name} must not depend on tool crate {tool}"
-            );
-        }
-    }
+    assert_no_upward_edges(&engine_crates, &tool_crates, &edges)?;
 
     // Specific foundation boundary invariants (FND-INV-01, FND-INV-02, SPN-INV-004..006).
     assert!(
@@ -853,6 +841,11 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
         1,
         "spawn-core must have zero normal dependencies:\n{core_tree}"
     );
+    assert_eq!(
+        parse_cargo_tree_crates(&core_tree),
+        BTreeSet::from(["spawn-core".to_owned()]),
+        "spawn-core must have zero normal dependencies:\n{core_tree}"
+    );
 
     let platform_headless_tree = cargo_tree(&root, &["-p", "spawn-platform", "-e", "normal"])?;
     assert_eq!(
@@ -860,15 +853,14 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
         1,
         "spawn-platform default features must have zero normal dependencies:\n{platform_headless_tree}"
     );
+    assert_eq!(
+        parse_cargo_tree_crates(&platform_headless_tree),
+        BTreeSet::from(["spawn-platform".to_owned()]),
+        "spawn-platform default features must have zero normal dependencies:\n{platform_headless_tree}"
+    );
 
     let render_headless_tree = cargo_tree(&root, &["-p", "spawn-render", "-e", "normal"])?;
-    let render_headless_crates: BTreeSet<String> = render_headless_tree
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
-            trimmed.split_whitespace().next().map(str::to_owned)
-        })
-        .collect();
+    let render_headless_crates = parse_cargo_tree_crates(&render_headless_tree);
     assert_eq!(
         render_headless_crates,
         BTreeSet::from([
@@ -880,28 +872,28 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
     );
 
     let input_tree = cargo_tree(&root, &["-p", "spawn-input", "-e", "normal"])?;
-    for forbidden in [
-        "ash",
-        "wayland-client",
-        "wayland-protocols",
-        "rustix",
-        "raw-window-handle",
-        "spawn-render",
-    ] {
-        assert!(
-            !input_tree.contains(forbidden),
-            "spawn-input normal tree must not contain `{forbidden}`:\n{input_tree}"
-        );
-    }
+    check_tree_forbids(
+        &input_tree,
+        "spawn-input normal tree",
+        &[
+            "ash",
+            "wayland-client",
+            "wayland-protocols",
+            "rustix",
+            "raw-window-handle",
+            "spawn-render",
+        ],
+    )?;
 
     let render_vulkan_tree = cargo_tree(
         &root,
         &["-p", "spawn-render", "--features", "vulkan", "-e", "normal"],
     )?;
-    assert!(
-        !render_vulkan_tree.contains("spawn-platform"),
-        "spawn-render --features vulkan must not depend on spawn-platform:\n{render_vulkan_tree}"
-    );
+    check_tree_forbids(
+        &render_vulkan_tree,
+        "spawn-render --features vulkan",
+        &["spawn-platform"],
+    )?;
 
     if cfg!(target_os = "linux") {
         let platform_wayland_tree = cargo_tree(
@@ -915,12 +907,11 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
                 "normal",
             ],
         )?;
-        for forbidden in ["spawn-render", "spawn-input", "ash"] {
-            assert!(
-                !platform_wayland_tree.contains(forbidden),
-                "spawn-platform --features wayland must not contain `{forbidden}`:\n{platform_wayland_tree}"
-            );
-        }
+        check_tree_forbids(
+            &platform_wayland_tree,
+            "spawn-platform --features wayland",
+            &["spawn-render", "spawn-input", "ash"],
+        )?;
     }
 
     // 4. Audit public API declarations across foundation crates for genre terms
@@ -941,7 +932,8 @@ fn fnd_t09_dependency_graph_headless_hygiene_and_genre_free_public_api()
 fn cargo_tree(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO"))
         .current_dir(root)
-        .arg("tree")
+        .env("CARGO_TERM_COLOR", "never")
+        .args(["tree", "--color", "never"])
         .args(args)
         .output()?;
     assert!(
@@ -949,7 +941,170 @@ fn cargo_tree(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::
         "cargo tree {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(String::from_utf8(output.stdout)?)
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        !stdout.contains('\x1b'),
+        "cargo tree {args:?} emitted unexpected ANSI escape sequences:\n{stdout}"
+    );
+    Ok(stdout)
+}
+
+fn strip_ansi_escapes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                let _ = chars.next();
+                for seq_ch in chars.by_ref() {
+                    if ('@'..='~').contains(&seq_ch) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn parse_cargo_tree_crates(tree: &str) -> BTreeSet<String> {
+    let clean = strip_ansi_escapes(tree);
+    clean
+        .lines()
+        .filter_map(|line| {
+            let trimmed =
+                line.trim_start_matches([' ', '│', '├', '└', '─', '┬', '|', '+', '`', '\\', '-']);
+            if trimmed.is_empty() || trimmed.starts_with('[') {
+                return None;
+            }
+            trimmed.split_whitespace().next().map(str::to_owned)
+        })
+        .collect()
+}
+
+fn check_tree_forbids(tree: &str, context: &str, forbidden: &[&str]) -> Result<(), String> {
+    let crates = parse_cargo_tree_crates(tree);
+    for &dep in forbidden {
+        if crates.contains(dep) {
+            return Err(format!("{context} must not contain `{dep}`:\n{tree}"));
+        }
+    }
+    Ok(())
+}
+
+fn assert_no_upward_edges(
+    engine_crates: &BTreeSet<String>,
+    tool_crates: &BTreeSet<String>,
+    edges: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), String> {
+    for crate_name in engine_crates {
+        let deps = &edges[crate_name];
+        if deps.contains("spawn-engine") {
+            return Err(format!(
+                "{crate_name} must not depend on composition root spawn-engine"
+            ));
+        }
+        for tool in tool_crates {
+            if deps.contains(tool) {
+                return Err(format!("{crate_name} must not depend on tool crate {tool}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cargo_tree_parser_handles_ansi_color_and_detects_forbidden_edges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // 1. Even if `CARGO_TERM_COLOR=always` is set in the environment, `--color never`
+    //    must suppress ANSI escapes from `cargo tree`.
+    let forced_color_out = Command::new(env!("CARGO"))
+        .current_dir(&root)
+        .env("CARGO_TERM_COLOR", "always")
+        .args([
+            "tree",
+            "--color",
+            "never",
+            "-p",
+            "spawn-render",
+            "-e",
+            "normal",
+        ])
+        .output()?;
+    assert!(forced_color_out.status.success());
+    let forced_stdout = String::from_utf8(forced_color_out.stdout)?;
+    assert!(!forced_stdout.contains('\x1b'));
+    assert_eq!(
+        parse_cargo_tree_crates(&forced_stdout),
+        BTreeSet::from([
+            "spawn-render".to_owned(),
+            "spawn-math".to_owned(),
+            "libm".to_owned(),
+        ])
+    );
+
+    // 2. If ANSI CSI escapes are present in `cargo tree` output, `parse_cargo_tree_crates`
+    //    must strip them cleanly rather than emitting `"2m"` tokens.
+    let ansi_tree = "\x1b[0m\x1b[1mspawn-render\x1b[0m v0.1.0 (/repo/crates/spawn-render)\n\
+                     \x1b[0m\x1b[2m└──\x1b[0m \x1b[0m\x1b[1mspawn-math\x1b[0m v0.1.0 (/repo/crates/spawn-math)\n\
+                     \x1b[0m\x1b[2m    └──\x1b[0m \x1b[0m\x1b[1mlibm\x1b[0m v0.2.16\n";
+    assert_eq!(
+        parse_cargo_tree_crates(ansi_tree),
+        BTreeSet::from([
+            "spawn-render".to_owned(),
+            "spawn-math".to_owned(),
+            "libm".to_owned(),
+        ])
+    );
+
+    // 3. Forbidden dependencies (`ash`, `wayland-client`, `winit`, or upward crate edges)
+    //    must still fail verification in both plain and ANSI-colored outputs.
+    for forbidden in [
+        "ash",
+        "wayland-client",
+        "winit",
+        "spawn-engine",
+        "spawn-cli",
+    ] {
+        let synthetic_tree = format!(
+            "\x1b[0m\x1b[1mspawn-input\x1b[0m v0.1.0\n\
+             \x1b[0m\x1b[2m└──\x1b[0m \x1b[0m\x1b[1m{forbidden}\x1b[0m v0.1.0\n"
+        );
+        let err = check_tree_forbids(
+            &synthetic_tree,
+            "regression check",
+            &[
+                "ash",
+                "wayland-client",
+                "winit",
+                "spawn-engine",
+                "spawn-cli",
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains(forbidden), "unexpected error text: {err}");
+    }
+
+    // 4. Upward manifest edge (`spawn-render -> spawn-engine` or `spawn-cli`) fails explicitly.
+    let engine_crates = BTreeSet::from(["spawn-render".to_owned()]);
+    let tool_crates = BTreeSet::from(["spawn-cli".to_owned()]);
+    let mut bad_edges = BTreeMap::new();
+    bad_edges.insert(
+        "spawn-render".to_owned(),
+        BTreeSet::from(["spawn-engine".to_owned()]),
+    );
+    assert!(assert_no_upward_edges(&engine_crates, &tool_crates, &bad_edges).is_err());
+    bad_edges.insert(
+        "spawn-render".to_owned(),
+        BTreeSet::from(["spawn-cli".to_owned()]),
+    );
+    assert!(assert_no_upward_edges(&engine_crates, &tool_crates, &bad_edges).is_err());
+
+    Ok(())
 }
 
 fn parse_manifest_spawn_deps(content: &str) -> (String, BTreeSet<String>) {

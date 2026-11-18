@@ -6,9 +6,10 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::allocator::MemoryDomain;
 use crate::error::{RenderError, RenderErrorKind};
+use crate::handle::{GenerationalPool, MeshHandle};
 use crate::mesh::{
-    MESH_PUSH_CONSTANT_BYTES, MESH_VERTEX_STRIDE, MeshDescriptor, MeshVertex,
-    PackedMeshPushConstants,
+    CameraRelativeView, MESH_PUSH_CONSTANT_BYTES, MESH_VERTEX_STRIDE, MeshDescriptor, MeshDraw,
+    MeshVertex, PackedMeshPushConstants,
 };
 use crate::vulkan::device::DeviceOwner;
 use crate::vulkan::memory::{VulkanBuffer, VulkanMemoryAllocator};
@@ -178,12 +179,60 @@ pub(crate) fn prepare_mesh_staging_upload(
     })
 }
 
+/// Validates `view` and `draws` and packs draw records into `out`, reusing `out`'s
+/// existing heap allocation across frames so steady-state rendering performs zero
+/// heap allocations after warm-up.
+#[track_caller]
+pub(crate) fn prepare_mesh_draws_into(
+    meshes: &GenerationalPool<MeshHandle, UploadedMesh>,
+    out: &mut Vec<PreparedMeshDraw>,
+    view: &CameraRelativeView,
+    draws: &[MeshDraw],
+) -> Result<(), RenderError> {
+    out.clear();
+    if !view.projection.is_finite() || !view.camera_rotation.is_finite() {
+        return Err(RenderError::new(RenderErrorKind::InvalidResourceDescriptor)
+            .with_detail("CameraRelativeView contains NaN or infinite values"));
+    }
+    out.reserve(draws.len());
+    for draw in draws {
+        let uploaded = meshes.get(draw.mesh)?;
+        let packed = draw.pack_push_constants(view)?;
+        out.push(PreparedMeshDraw {
+            vertex_buffer: uploaded.vertex_buffer.handle,
+            index_buffer: uploaded.index_buffer.handle,
+            index_count: uploaded.index_count,
+            push_constants: GpuMeshPushConstants::from_packed(&packed),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allocator::{AllocationId, BlockId, Suballocation, SuballocationKind};
     use crate::handle::MeshHandle;
     use crate::mesh::{CameraRelativeView, MeshDraw};
+    use ash::vk::Handle as _;
     use spawn_math::{Mat4, Quat, Vec3, Vec4};
+
+    fn dummy_buffer(raw_handle: u64) -> VulkanBuffer {
+        VulkanBuffer {
+            handle: vk::Buffer::from_raw(raw_handle),
+            suballocation: Suballocation {
+                id: AllocationId(raw_handle),
+                block_id: BlockId(1),
+                domain: MemoryDomain::DeviceLocal,
+                memory_type_index: 0,
+                offset: 0,
+                size: 64,
+                alignment: 16,
+                kind: SuballocationKind::Linear,
+                dedicated: false,
+            },
+        }
+    }
 
     #[test]
     fn bytemuck_pod_push_constants_match_headless_le_bytes_exact() {
@@ -198,5 +247,71 @@ mod tests {
         let packed = draw.pack_push_constants(&view).unwrap();
         let pod = GpuMeshPushConstants::from_packed(&packed);
         assert_eq!(bytemuck::bytes_of(&pod), &packed.to_le_bytes());
+    }
+
+    #[test]
+    fn prepare_mesh_draws_reuses_capacity_without_reallocating_after_warmup() {
+        let mut meshes = GenerationalPool::new();
+        let mesh_a = meshes
+            .insert(UploadedMesh {
+                vertex_buffer: dummy_buffer(1),
+                index_buffer: dummy_buffer(2),
+                index_count: 36,
+            })
+            .unwrap();
+        let mesh_b = meshes
+            .insert(UploadedMesh {
+                vertex_buffer: dummy_buffer(3),
+                index_buffer: dummy_buffer(4),
+                index_count: 6,
+            })
+            .unwrap();
+
+        let proj = Mat4::perspective_reversed_z_rh(1.2, 1.5, 0.1, 200.0).unwrap();
+        let view = CameraRelativeView::new(proj, Quat::IDENTITY);
+        let draws_8: Vec<MeshDraw> = (0..8)
+            .map(|i| {
+                let handle = if i % 2 == 0 { mesh_a } else { mesh_b };
+                MeshDraw::new(handle, Vec3::new(i as f32, 0.0, -4.0))
+            })
+            .collect();
+
+        let mut scratch = Vec::new();
+        prepare_mesh_draws_into(&meshes, &mut scratch, &view, &draws_8).unwrap();
+        assert_eq!(scratch.len(), 8);
+        let cap_after_warmup = scratch.capacity();
+        let ptr_after_warmup = scratch.as_ptr();
+        assert!(cap_after_warmup >= 8);
+
+        // Smaller draw list, empty draw list, and peak-size draw list must all
+        // reuse the exact backing allocation with zero reallocation.
+        prepare_mesh_draws_into(&meshes, &mut scratch, &view, &draws_8[..3]).unwrap();
+        assert_eq!(scratch.len(), 3);
+        assert_eq!(scratch.capacity(), cap_after_warmup);
+        assert_eq!(scratch.as_ptr(), ptr_after_warmup);
+
+        prepare_mesh_draws_into(&meshes, &mut scratch, &view, &[]).unwrap();
+        assert!(scratch.is_empty());
+        assert_eq!(scratch.capacity(), cap_after_warmup);
+        assert_eq!(scratch.as_ptr(), ptr_after_warmup);
+
+        prepare_mesh_draws_into(&meshes, &mut scratch, &view, &draws_8).unwrap();
+        assert_eq!(scratch.len(), 8);
+        assert_eq!(scratch.capacity(), cap_after_warmup);
+        assert_eq!(scratch.as_ptr(), ptr_after_warmup);
+
+        // An invalid draw clears stale entries without dropping capacity.
+        let bad_draws = [MeshDraw::new(MeshHandle::from_raw(99, 1), Vec3::ZERO)];
+        let err = prepare_mesh_draws_into(&meshes, &mut scratch, &view, &bad_draws).unwrap_err();
+        assert_eq!(err.kind(), RenderErrorKind::InvalidResourceHandle);
+        assert!(scratch.is_empty());
+        assert_eq!(scratch.capacity(), cap_after_warmup);
+        assert_eq!(scratch.as_ptr(), ptr_after_warmup);
+
+        // Subsequent valid steady-state frame still performs zero reallocations.
+        prepare_mesh_draws_into(&meshes, &mut scratch, &view, &draws_8).unwrap();
+        assert_eq!(scratch.len(), 8);
+        assert_eq!(scratch.capacity(), cap_after_warmup);
+        assert_eq!(scratch.as_ptr(), ptr_after_warmup);
     }
 }

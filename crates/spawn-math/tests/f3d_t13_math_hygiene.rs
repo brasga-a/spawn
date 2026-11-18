@@ -19,7 +19,16 @@ fn f3d_t13_spawn_math_dependency_tree_public_api_safety_and_doc_sync()
     //    (zero `spawn-*` deps per SPN-INV-004, zero OS/GPU/test deps per SPN-INV-009/023).
     let tree_out = Command::new(env!("CARGO"))
         .current_dir(workspace_root)
-        .args(["tree", "-p", "spawn-math", "-e", "normal"])
+        .env("CARGO_TERM_COLOR", "never")
+        .args([
+            "tree",
+            "--color",
+            "never",
+            "-p",
+            "spawn-math",
+            "-e",
+            "normal",
+        ])
         .output()?;
     assert!(
         tree_out.status.success(),
@@ -27,6 +36,10 @@ fn f3d_t13_spawn_math_dependency_tree_public_api_safety_and_doc_sync()
         String::from_utf8_lossy(&tree_out.stderr)
     );
     let tree = String::from_utf8(tree_out.stdout)?;
+    assert!(
+        !tree.contains('\x1b'),
+        "cargo tree emitted unexpected ANSI escape sequences:\n{tree}"
+    );
     let lines: Vec<&str> = tree.lines().collect();
     assert_eq!(
         lines.len(),

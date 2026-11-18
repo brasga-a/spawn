@@ -961,11 +961,15 @@ fn verify_3d_occlusion_culling_and_50km_precision(
 fn f3d_t12_mesh_staging_reversed_z_occlusion_50km_precision_and_swapchain_gpu() {
     let descriptor = RendererDescriptor {
         present_mode: PresentModePreference::Fifo,
-        validation: Validation::IfAvailable,
+        validation: Validation::Required,
     };
     let mut renderer = Renderer::new_headless(SurfaceSize::new(320, 240), &descriptor)
-        .expect("Vulkan 1.3 headless renderer required");
+        .expect("Vulkan 1.3 headless renderer with required validation");
     assert_eq!(renderer.state(), PresentationState::Ready);
+    assert!(
+        renderer.info().validation_enabled,
+        "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
+    );
 
     let vs_bytes = encode_mesh_3d_vs().expect("valid synthesized mesh_3d VS");
     let fs_bytes = encode_mesh_3d_fs().expect("valid synthesized mesh_3d FS");
@@ -1200,6 +1204,7 @@ fn f3d_t12_mesh_staging_reversed_z_occlusion_50km_precision_and_swapchain_gpu() 
     let mut oom_renderer =
         Renderer::new_headless_with_budget(SurfaceSize::new(0, 0), &descriptor, tiny_budget)
             .expect("suspended renderer with tiny device_local budget");
+    assert!(oom_renderer.info().validation_enabled);
     let big_verts = vec![MeshVertex::new(Vec3::ZERO, Vec3::Z, Vec4::ONE); 200]; // 8,000 B > 4,096 B budget
     let big_indices = [0_u32, 1, 2];
     let oom_err = oom_renderer
@@ -1207,6 +1212,11 @@ fn f3d_t12_mesh_staging_reversed_z_occlusion_50km_precision_and_swapchain_gpu() 
         .unwrap_err();
     assert_eq!(oom_err.kind(), RenderErrorKind::GpuMemoryExhausted);
     assert_eq!(oom_err.code(), "REND-0012");
+    let oom_mid_stats = oom_renderer.allocator_stats();
+    assert_eq!(oom_mid_stats.live_allocations, 0);
+    assert_eq!(oom_mid_stats.live_allocated_bytes, 0);
+    assert_eq!(oom_mid_stats.retired_allocations, 0);
+    assert_eq!(oom_mid_stats.retired_bytes, 0);
     assert_no_validation_errors(&mut oom_renderer);
     let oom_shutdown = oom_renderer.close().expect("clean close after OOM");
     assert_eq!(oom_shutdown.block_count, 0);
@@ -1215,31 +1225,32 @@ fn f3d_t12_mesh_staging_reversed_z_occlusion_50km_precision_and_swapchain_gpu() 
 }
 
 /// Executes the real authored `shaders/mesh_3d.slang` cooked via `spawn-cli` / `slangc 2026.22`
-/// on the Vulkan 1.3 GPU when cooked artifacts or pinned `slangc` are available, verifying
-/// end-to-end shader-cook -> reflection validation -> `vkCreateShaderModule` -> `dynamicRendering`
-/// reversed-Z occlusion & `±50 km` precision!
+/// on the Vulkan 1.3 GPU, verifying end-to-end shader-cook -> reflection validation ->
+/// `vkCreateShaderModule` -> `dynamicRendering` reversed-Z occlusion & `±50 km` precision.
+/// Fails explicitly if neither pre-cooked `target/shaders/mesh_3d.*.spnshdr` nor pinned
+/// `slangc` on `PATH` is present (never silently returns `Ok(())`).
 #[test]
-#[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface"]
-fn f3d_t12_cooked_mesh_3d_slang_executes_on_gpu_when_available() {
+#[ignore = "needs a Vulkan 1.3 GPU with VK_EXT_headless_surface and cooked mesh_3d shaders (or slangc)"]
+fn f3d_t12_cooked_mesh_3d_slang_executes_on_gpu() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("workspace root")
         .to_path_buf();
 
-    let Some((vs_bytes, fs_bytes)) = load_or_cook_real_mesh_3d_shaders(&workspace_root) else {
-        eprintln!(
-            "skipping real mesh_3d.slang GPU execution check: neither target/shaders/mesh_3d.*.spnshdr nor slangc found"
-        );
-        return;
-    };
+    let (vs_bytes, fs_bytes) = load_or_cook_real_mesh_3d_shaders(&workspace_root)
+        .expect("real mesh_3d.slang shaders must be pre-cooked or cooked via pinned slangc");
 
     let descriptor = RendererDescriptor {
         present_mode: PresentModePreference::Fifo,
-        validation: Validation::IfAvailable,
+        validation: Validation::Required,
     };
     let mut renderer = Renderer::new_headless(SurfaceSize::new(0, 0), &descriptor)
-        .expect("Vulkan 1.3 headless renderer");
+        .expect("Vulkan 1.3 headless renderer with required validation");
+    assert!(
+        renderer.info().validation_enabled,
+        "VK_LAYER_KHRONOS_validation must be active for opt-in GPU verification"
+    );
     verify_3d_occlusion_culling_and_50km_precision(
         &mut renderer,
         &vs_bytes,
@@ -1247,46 +1258,66 @@ fn f3d_t12_cooked_mesh_3d_slang_executes_on_gpu_when_available() {
         "slangc_cooked_mesh_3d",
     )
     .expect("real slangc-cooked mesh_3d.slang GPU execution");
+    let reclaimed = renderer.wait_idle_and_reclaim().expect("reclaim idle");
+    assert_eq!(reclaimed.live_allocations, 0);
+    assert_eq!(reclaimed.retired_allocations, 0);
+    assert_no_validation_errors(&mut renderer);
     let shutdown = renderer.close().expect("clean close");
     assert_eq!(shutdown.block_count, 0);
     assert_eq!(shutdown.live_allocations, 0);
     assert_eq!(shutdown.retired_allocations, 0);
 }
 
-fn load_or_cook_real_mesh_3d_shaders(workspace_root: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
+fn load_or_cook_real_mesh_3d_shaders(workspace_root: &Path) -> Result<(Vec<u8>, Vec<u8>), String> {
     let pre_vs = workspace_root.join("target/shaders/mesh_3d.vs_main.spnshdr");
     let pre_fs = workspace_root.join("target/shaders/mesh_3d.fs_main.spnshdr");
     if pre_vs.is_file() && pre_fs.is_file() {
-        let vs = fs::read(pre_vs).ok()?;
-        let fs = fs::read(pre_fs).ok()?;
-        return Some((vs, fs));
+        let vs = fs::read(&pre_vs)
+            .map_err(|err| format!("failed to read {}: {err}", pre_vs.display()))?;
+        let fs = fs::read(&pre_fs)
+            .map_err(|err| format!("failed to read {}: {err}", pre_fs.display()))?;
+        return Ok((vs, fs));
     }
 
-    // Try cooking into a temporary directory via `spawn-cli` if `slangc` is available.
+    // Cook into a temporary directory via `spawn-cli` (requires pinned `slangc` on `PATH`).
     let tmp_dir = std::env::temp_dir().join(format!("spawn_f3d_t12_cook_{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp_dir);
-    fs::create_dir_all(&tmp_dir).ok()?;
-    let out = Command::new(env!("CARGO"))
-        .current_dir(workspace_root)
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "spawn-cli",
-            "--",
-            "shaders",
-            "build",
-            "--out",
-        ])
-        .arg(&tmp_dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        let _ = fs::remove_dir_all(&tmp_dir);
-        return None;
-    }
-    let vs = fs::read(tmp_dir.join("mesh_3d.vs_main.spnshdr")).ok();
-    let fs = fs::read(tmp_dir.join("mesh_3d.fs_main.spnshdr")).ok();
+    fs::create_dir_all(&tmp_dir)
+        .map_err(|err| format!("failed to create temp dir {}: {err}", tmp_dir.display()))?;
+
+    let cook_result = (|| -> Result<(Vec<u8>, Vec<u8>), String> {
+        let out = Command::new(env!("CARGO"))
+            .current_dir(workspace_root)
+            .args([
+                "run",
+                "--quiet",
+                "-p",
+                "spawn-cli",
+                "--",
+                "shaders",
+                "build",
+                "--out",
+            ])
+            .arg(&tmp_dir)
+            .output()
+            .map_err(|err| format!("failed to invoke `cargo run -p spawn-cli`: {err}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "`cargo run -p spawn-cli -- shaders build` failed (exit {:?}); ensure pinned `slangc` is on PATH or pre-cook `target/shaders/`:\nstdout: {}\nstderr: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            ));
+        }
+        let vs_path = tmp_dir.join("mesh_3d.vs_main.spnshdr");
+        let fs_path = tmp_dir.join("mesh_3d.fs_main.spnshdr");
+        let vs = fs::read(&vs_path)
+            .map_err(|err| format!("failed to read {}: {err}", vs_path.display()))?;
+        let fs = fs::read(&fs_path)
+            .map_err(|err| format!("failed to read {}: {err}", fs_path.display()))?;
+        Ok((vs, fs))
+    })();
+
     let _ = fs::remove_dir_all(&tmp_dir);
-    Some((vs?, fs?))
+    cook_result
 }
