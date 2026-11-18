@@ -84,6 +84,8 @@ impl FixedStepConfig {
     /// # Errors
     ///
     /// - [`ClockErrorKind::ZeroTickRate`] if `tick_rate_hz` is zero.
+    /// - [`ClockErrorKind::ZeroTickDuration`] if `tick_rate_hz > 1_000_000_000`
+    ///   (truncates to zero nanoseconds).
     /// - [`ClockErrorKind::ZeroMaxTicksPerUpdate`] if `max_ticks_per_update` is zero.
     #[track_caller]
     pub fn from_tick_rate(
@@ -330,6 +332,22 @@ mod tests {
         let error = FixedStepConfig::from_tick_rate(0, 4).unwrap_err();
         assert_eq!(error.kind(), ClockErrorKind::ZeroTickRate);
         assert_eq!(error.code(), "CORE-0002");
+    }
+
+    #[test]
+    fn rejects_sub_nanosecond_tick_rate() {
+        let one_ghz = FixedStepConfig::from_tick_rate(1_000_000_000, 4).unwrap();
+        assert_eq!(one_ghz.tick_duration(), Duration::from_nanos(1));
+
+        let line = line!() + 1;
+        let error = FixedStepConfig::from_tick_rate(1_000_000_001, 4).unwrap_err();
+        assert_eq!(error.kind(), ClockErrorKind::ZeroTickDuration);
+        assert_eq!(error.code(), "CORE-0001");
+        assert_eq!(error.location().line(), line);
+
+        let max_error = FixedStepConfig::from_tick_rate(u32::MAX, 4).unwrap_err();
+        assert_eq!(max_error.kind(), ClockErrorKind::ZeroTickDuration);
+        assert_eq!(max_error.code(), "CORE-0001");
     }
 
     #[test]

@@ -4,7 +4,7 @@ Local rules for `spawn-core` (crate). Global rules: [root AGENTS.md](../../AGENT
 
 ## Purpose
 
-Defines the smallest set of lifecycle and orchestration contracts that subsystems need to be driven uniformly (initialize, update, shutdown) and the fixed-timestep loop contract (PLANNED). It is a contract crate, not a utility library.
+Defines the smallest set of lifecycle and orchestration contracts that subsystems need to be driven uniformly (initialize, update, shutdown; `PLANNED`) and the fixed-timestep loop contract (`EXISTS`: `FixedStepClock`). It is a contract crate, not a utility library.
 
 ## Responsibilities
 
@@ -42,7 +42,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 
 ## Testing Requirements
 
-- Headless unit tests for loop timing (accumulator behavior, catch-up limits, no spiral of death) once implemented.
+- Headless unit tests for loop timing (accumulator behavior, catch-up limits, no spiral of death).
 - Compile-time/doc tests showing a minimal implementor of each contract.
 
 ## Governing Decisions
@@ -67,7 +67,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 
 | Code | Kind | Meaning |
 | --- | --- | --- |
-| `CORE-0001` | `ZeroTickDuration` | Tick duration is zero |
+| `CORE-0001` | `ZeroTickDuration` | Tick duration is zero (or tick rate > 1 000 000 000 Hz truncates to 0 ns) |
 | `CORE-0002` | `ZeroTickRate` | Tick rate is zero |
 | `CORE-0003` | `ZeroMaxTicksPerUpdate` | Max ticks per update is zero |
 | `CORE-0004` | `TickIndexExhausted` | Advancing would overflow the `u64` tick index |
@@ -79,7 +79,7 @@ Defines the smallest set of lifecycle and orchestration contracts that subsystem
 - The configuration is fixed for the clock's lifetime (no setters).
 - The last executable tick is `u64::MAX - 1`; past that, `advance` returns `CORE-0004`, leaves the clock unchanged and never wraps.
 
-**Tests (all passing):** 14 unit tests in `src/fixed_step.rs` (config validation, zero elapsed, exact tick boundary, partial accumulation, multiple ticks per advance, iterator, last-index boundary, exhaustion, error report format, saturation); 6 verification tests in `tests/fixed_step_verification.rs` (FND-T01: identical sequences, render-cadence independence at 100/40/25 fps, 5 000 irregular frames with exact tick total and consecutive indices; FND-T02: 10 s pause bounded to 4 ticks with 9.96 s dropped and continuous indices, remainder kept after a drop, `Duration::MAX` repeatedly); 1 doc test. No GPU, window or OS clock involved.
+**Tests (all passing):** 15 unit tests in `src/fixed_step.rs` (config validation, zero elapsed, exact tick boundary, partial accumulation, multiple ticks per advance, iterator, last-index boundary, exhaustion, error report format, saturation); 6 verification tests in `tests/fixed_step_verification.rs` (FND-T01: identical sequences, render-cadence independence at 100/40/25 fps, 5 000 irregular frames with exact tick total and consecutive indices; FND-T02: 10 s pause bounded to 4 ticks with 9.96 s dropped and continuous indices, remainder kept after a drop, `Duration::MAX` repeatedly); 1 doc test. No GPU, window or OS clock involved.
 
 **Not implemented / deferred:**
 
