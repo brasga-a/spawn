@@ -21,7 +21,7 @@
 | [First 3D design](first-3d/DESIGN.md) | How do `spawn-math`, `spawn-cli`, `spawn-render`, and `spawn-engine` deliver 3D without coupling? |
 | [First 3D invariants](first-3d/INVARIANTS.md) | What spatial, shader, GPU, and simulation/presentation rules govern Milestone 2? |
 | [First 3D verification](first-3d/VERIFICATION.md) | How will we prove math precision, offline shader cooking, reversed-Z occlusion, and camera determinism? |
-| [First 3D delivery plan](first-3d/PLAN.md) | In what order (Phases 0–6, starting with `ADR-0014` review) will Milestone 2 land? |
+| [First 3D delivery plan](first-3d/PLAN.md) | In what order (Phases 0–6) will Milestone 2 land? |
 | [Architecture decisions](adr/README.md) | Which choices are proposed or accepted? |
 | [Approved dependencies](DEPENDENCIES.md) | Which third-party crates may be added, where, and which are rejected? |
 
@@ -41,4 +41,4 @@ When a milestone requirement changes, update its requirement ID, related invaria
 
 Scope at this stage:
 - **Implemented ([foundation/](foundation/README.md), `EXISTS` on Linux/Wayland):** native application lifecycle, window, raw input events (including relative pointer motion and cursor constraints), semantic input sampling, a Vulkan 1.3 clear frame, graceful recovery, and headless timing/input/composition tests.
-- **Next planned slice ([first-3d/](first-3d/README.md), `PLANNED`):** `spawn-math` (`f32` primitives, `f64` world positions, reversed-Z, single-site Vulkan Y-flip, `libm` deterministic subset), offline Slang → SPIR-V shader cooking in `spawn-cli` (*proposal, pending Phase 0 acceptance of [ADR-0014](adr/0014-shader-toolchain.md)*), in-house Vulkan 1.3 block allocator, buffers, `D32_SFLOAT` reversed-Z depth, and dynamic-rendering mesh pipeline in `spawn-render`, plus a genre-free 60 Hz `f64` free-fly camera with `alpha` presentation interpolation and camera-relative `f32` submission in `spawn-engine`. No genre-specific behavior.
+- **Next planned slice ([first-3d/](first-3d/README.md), `PLANNED`):** `spawn-math` (`f32` primitives, `f64` world positions, reversed-Z, single-site Vulkan Y-flip, `libm` deterministic subset), offline Slang → SPIR-V shader cooking in `spawn-cli` ([ADR-0014](adr/0014-shader-toolchain.md)), in-house Vulkan 1.3 block allocator, buffers, `D32_SFLOAT` reversed-Z depth, and dynamic-rendering mesh pipeline in `spawn-render`, plus a genre-free 60 Hz `f64` free-fly camera with `alpha` presentation interpolation and camera-relative `f32` submission in `spawn-engine`. No genre-specific behavior.

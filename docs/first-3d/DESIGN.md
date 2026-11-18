@@ -1,11 +1,11 @@
 # Technical Design — First 3D Rendering and Free Camera
 
-**Status:** `PLANNED` DESIGN PROPOSAL. Type, module, and command names in this document illustrate intended responsibilities and contracts; none exist in source yet (`SPN-INV-100`). Elements governed by *Proposed* [ADR-0014](../adr/0014-shader-toolchain.md), [ADR-0020](../adr/0020-memory-strategy.md), or [ADR-0022](../adr/0022-repository-layout.md) are explicitly marked **proposal (pending Phase 0 owner acceptance)**.
+**Status:** `PLANNED` DESIGN PROPOSAL. Type, module, and command names in this document illustrate intended responsibilities and contracts; none exist in source yet (`SPN-INV-100`). Elements governed by *Proposed* [ADR-0020](../adr/0020-memory-strategy.md) or [ADR-0022](../adr/0022-repository-layout.md) remain marked **proposal**.
 
 ## 1. Architecture and crate boundaries
 
 ```text
-Offline tool path (proposal, pending Phase 0 acceptance of ADR-0014):
+Offline tool path (ADR-0014):
   shaders/*.slang ──► spawn-cli (invokes pinned slangc) ──► build output (.spv + reflection)
                             │ (optional headless format reuse: spawn-render default-features=false)
                             ▼
@@ -31,11 +31,11 @@ Forbidden edges:
 | --- | --- | --- | --- |
 | `spawn-math` | none | `libm`, `bytemuck` (if POD casts needed); dev-only: `glam` (oracle), `proptest`, `insta` | Zero OS/GPU deps; never logs; no third-party types in public API; error prefix `MATH-0001`+ if needed. |
 | `spawn-core` | none | dev-only: `proptest`, `insta` | Existing `FixedStepClock` unchanged unless ≥ 2 crates share an `alpha` helper ([spawn-core AGENTS.md](../../crates/spawn-core/AGENTS.md)). |
-| `spawn-cli` (*proposal per ADR-0014*) | `spawn-render` (`default-features = false`, headless format/validation only) if shared binary header lives there | `clap`, `rspirv`, external `slangc` (pending Phase 0 license sign-off); dev-only: `proptest`, `insta` | Headless (`SPN-INV-009`); never links `vulkan` or `wayland` (`tools/spawn-cli/AGENTS.md` refined in Phase 2 — see below); error prefix `CLI-0001`+. `serde_json`, `tempfile`, and `blake3` (in `spawn-cli`) are **not** approved without a Gate G2 `DEPENDENCIES.md` update. |
+| `spawn-cli` | `spawn-render` (`default-features = false`, headless format/validation only) if shared binary header lives there | `clap`, `rspirv`, external `slangc` (`Apache-2.0 WITH LLVM-exception`); dev-only: `proptest`, `insta` | Headless (`SPN-INV-009`); never links `vulkan` or `wayland` ([spawn-cli AGENTS.md](../../tools/spawn-cli/AGENTS.md)); error prefix `CLI-0001`+. `serde_json`, `tempfile`, and `blake3` (in `spawn-cli`) are **not** approved without a Gate G2 `DEPENDENCIES.md` update. |
 | `spawn-render` | `spawn-math` (`default-features = false`) | `bytemuck` (always or `vulkan`), `ash` + `raw-window-handle` (`vulkan` feature only); dev-only: `proptest`, `insta`, `cargo-fuzz` + `arbitrary` | `default = []` stays GPU-free; all `ash`/`unsafe` stays in private `src/vulkan/`; new error codes start at `REND-0010` (`REND-0001..0009` already assigned). |
 | `spawn-engine` | `spawn-core`, `spawn-math`, `spawn-input`, `spawn-platform`, `spawn-render` | none required (`smallvec`/`arrayvec`/`bitflags` available if needed) | `#![forbid(unsafe_code)]`; new error codes start at `ENGN-0008` (`ENGN-0001..0007` already assigned); keeps layout in root `src/` / `examples/` unless *Proposed* [ADR-0022](../adr/0022-repository-layout.md) is accepted. |
 
-Adding `spawn-render -> spawn-math`, `spawn-engine -> spawn-math`, and (if shared cooked-shader types live in `spawn-render`) `spawn-cli -> spawn-render (default-features = false)` requires updating root `AGENTS.md`, `crates/spawn-render/AGENTS.md`, `tools/spawn-cli/AGENTS.md`, and `docs/DEPENDENCIES.md` (`In use` column) in the same change (`SPN-INV-101`, Gate G0/G2). Note: `tools/spawn-cli/AGENTS.md` currently states *"Headless: must not require `spawn-platform` windowing or `spawn-render`, except for explicitly graphical commands"*; Phase 2 refines that sentence (per root `AGENTS.md` doc-conflict rules) to forbid `spawn-render` GPU backends (`vulkan` feature) while allowing headless `spawn-render` (`default-features = false`) so engine validation rules are called rather than duplicated.
+Adding `spawn-render -> spawn-math`, `spawn-engine -> spawn-math`, and (if shared cooked-shader types live in `spawn-render`) `spawn-cli -> spawn-render (default-features = false)` requires updating root `AGENTS.md`, `crates/spawn-render/AGENTS.md`, `tools/spawn-cli/AGENTS.md`, and `docs/DEPENDENCIES.md` (`In use` column) in the same change (`SPN-INV-101`, Gate G0/G2).
 
 ## 2. Spatial math, coordinates, and determinism (`spawn-math`, ADR-0010)
 
@@ -68,16 +68,14 @@ For vertical field of view `fov_y` (radians), `aspect = width / height`, `g = 1 
 - `spawn-math::det` (module name illustrative) wraps IEEE-754 `f32::sqrt`/`f64::sqrt` and pure-Rust `libm` (`sinf`/`sin`, `cosf`/`cos`, `atan2f`/`atan2`, clamped `asinf`/`acosf`, `expf`/`exp`, `logf`/` log`) with no architecture-dependent FMA contraction. Simulation-tick camera orientation and movement integration call only this subset.
 - Presentation-only code (projection setup from `fov_y`, frame interpolation helpers not shared with prediction) may use standard platform float operations.
 
-## 3. Offline shader cooking and validation (**proposal**, pending Phase 0 acceptance of ADR-0014)
+## 3. Offline shader cooking and validation ([ADR-0014](../adr/0014-shader-toolchain.md))
 
-> **Proposal status:** Everything in §3 beyond [ADR-0004](../adr/0004-in-house-graphics-api.md)'s accepted rule (*"Slang, compiled offline to SPIR-V; runtime loads SPIR-V only"*) is a **proposal** contingent on Phase 0 owner acceptance of [ADR-0014](../adr/0014-shader-toolchain.md) and Slang (`Apache-2.0 WITH LLVM-exception`) license sign-off in [DEPENDENCIES.md](../DEPENDENCIES.md).
-
-### 3.1 `spawn-cli` shader build workflow (`SPN-INV-083`, *proposal* `SPN-INV-084`)
+### 3.1 `spawn-cli` shader build workflow (`SPN-INV-083`, `SPN-INV-084`)
 
 - `tools/spawn-cli` adds a binary entrypoint (`spawn` / `spawn-cli`) using `clap` with a non-interactive subcommand (e.g. `shaders build --manifest <dir> --out <dir>`).
 - **Pinned compiler check:** Repository configuration records the exact required `slangc` version string. Before compiling, `spawn-cli` invokes `slangc -v` (or `--version`), parses the version, and fails with a located `CLI-0001`+ error if `slangc` is missing or mismatched.
 - **Compilation:** Invokes `slangc` targeting Vulkan 1.3 (`-target spirv -profile spirv_1_6` with explicit column-major matrix layout matching `spawn-math`) per shader entry point. No `build.rs` in the workspace invokes `slangc`, and generated `.spv` / cooked shader files live under git-ignored build output (never committed).
-- **Reflection & cooked shader bundle:** `spawn-cli` inspects the emitted SPIR-V via approved `rspirv` (or a minimal in-house Slang reflection parser; using `serde_json` is **not** assumed unless approved and added to `DEPENDENCIES.md` in Phase 0) and writes a compact, versioned Spawn shader artifact containing:
+- **Reflection & cooked shader bundle:** `spawn-cli` inspects the emitted SPIR-V via approved `rspirv` (or a minimal in-house Slang reflection parser; using `serde_json` is **not** assumed unless approved and added to `DEPENDENCIES.md` under Gate G2) and writes a compact, versioned Spawn shader artifact containing:
   - Magic bytes, format `version`, stage mask, entry-point name, push-constant byte size/stages, descriptor bindings `(set, binding, kind, count, stages)`, vertex attribute `(location, format)` declarations, and 4-byte-aligned SPIR-V words.
 - **CI and missing-`slangc` rule:** Because `slangc` is an external developer tool not required for headless Rust builds, `spawn-cli` abstracts process execution behind an injectable runner trait so unit/integration tests (`F3D-T06`) verify version checking, flag construction, artifact packaging, and error reporting in `./scripts/check.sh` without `slangc` installed.
 

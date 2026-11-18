@@ -116,7 +116,7 @@ private RHI module (explicit queues, sync, memory)
 Vulkan 1.3 through ash  ──►  swapchain on the window handle (raw-window-handle)
 ```
 
-Shaders: Slang compiled offline to SPIR-V by `spawn-cli` (*proposed* ADR-0014).
+Shaders: Slang compiled offline to SPIR-V by `spawn-cli` ([ADR-0014](../adr/0014-shader-toolchain.md)).
 
 ### 3.6 Audio (ADR-0006)
 

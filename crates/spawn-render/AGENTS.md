@@ -46,8 +46,8 @@ Rendering infrastructure: GPU abstraction, resources, shaders, materials, pipeli
 
 ## Governing Decisions
 
-- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (caller-driven presentation cadence, simulation/presentation separation), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
-- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
+- **Accepted (binding):** [ADR-0003](../../docs/adr/0003-fixed-step-loop-and-threading.md) (caller-driven presentation cadence, simulation/presentation separation), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0009](../../docs/adr/0009-error-handling-and-diagnostics.md) (errors and diagnostics), [ADR-0010](../../docs/adr/0010-math-library.md) (math and spatial conventions), [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0020](../../docs/adr/0020-memory-strategy.md) (memory strategy).
 - **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `ash`, `raw-window-handle`, `bytemuck`, `renderdoc` (behind a feature), `gpu-allocator` (fallback only). Any other crate needs owner approval first.
 
 ## Current Implementation Status

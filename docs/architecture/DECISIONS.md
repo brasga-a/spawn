@@ -21,7 +21,7 @@ Consolidated record of every architectural decision: what was decided, which cra
 | [0011](../adr/0011-ecs-architecture.md) | Accepted | In-house ECS; archetypes + sparse sets; tick change detection; command buffers; deterministic scheduling; `bevy_ecs` as reference | `spawn-ecs` | Measured iteration/structural-change bottleneck |
 | [0012](../adr/0012-job-system.md) | Accepted | In-house work-stealing jobs in new `spawn-jobs` crate; `crossbeam-deque`; tasks, no fibers; configurable workers | `spawn-jobs` | Contention or idle workers measured |
 | [0013](../adr/0013-declarative-data-format.md) | Accepted | RON + `serde` authoring; cooked binary runtime; `version` + migrations; unknown fields are errors | data-defining crates | Modders find the format a barrier |
-| [0014](../adr/0014-shader-toolchain.md) | Proposed | Slang compiled by `spawn-cli`, never `build.rs`; pinned compiler; SPIR-V not committed; hot reload | `spawn-cli`, `spawn-render` | — |
+| [0014](../adr/0014-shader-toolchain.md) | Accepted | Slang compiled by `spawn-cli`, never `build.rs`; pinned compiler; SPIR-V not committed; hot reload | `spawn-cli`, `spawn-render` | Hot reload latency, variant growth, or D3D12 |
 | [0015](../adr/0015-asset-pipeline.md) | Accepted | Offline cook in `spawn-cli`; glTF primary, FBX via ufbx; PNG/JPEG/EXR by role; BCn; UUID `.meta`; content-hash cache | `spawn-assets`, `spawn-cli` | Load times or memory exceed budgets |
 | [0016](../adr/0016-networking-and-replication.md) | Proposed | In-house UDP protocol; audited crypto; snapshot deltas; prediction/reconciliation; interpolation; lag compensation; interest management | `spawn-network` | — |
 | [0017](../adr/0017-luau-scripting-runtime.md) | Proposed | `mlua` + Luau; separate client/server VMs; sandbox; limits; versioned API; type checking | `spawn-scripting` | — |
@@ -56,7 +56,6 @@ Consolidated record of every architectural decision: what was decided, which cra
 | Extensions | Is "how a game grows after release (DLC, expansions, mods)" the intended meaning? No dynamic Rust plugins or native mods? | [0024](../adr/0024-packages-and-game-extensions.md) |
 | Competitive integrity | Ranked modes only with official content and approved cosmetic mods? | [0025](../adr/0025-mods-and-workshop.md) |
 | Non-Steam mods | Support mods for players outside Steam (e.g. mod.io) now or later? | [0025](../adr/0025-mods-and-workshop.md) |
-| Shader toolchain | Verify the Slang compiler license (blocks the first shader) | [0014](../adr/0014-shader-toolchain.md) |
 
 ### Choices made at implementation time
 

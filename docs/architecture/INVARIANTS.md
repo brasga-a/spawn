@@ -103,7 +103,7 @@ Rules that must never be violated anywhere in Spawn. Each invariant has a stable
 | SPN-INV-081 | Data and asset errors name file, field (or node) and reason. | [ADR-0013](../adr/0013-declarative-data-format.md), [ADR-0015](../adr/0015-asset-pipeline.md) | test |
 | SPN-INV-082 | Game data references assets by UUID, never by path. | [ADR-0015](../adr/0015-asset-pipeline.md) | review, validation command |
 | SPN-INV-083 | Shipping builds load only cooked assets; the runtime never decodes PNG/JPEG/EXR or compiles shaders. | [ADR-0015](../adr/0015-asset-pipeline.md), [ADR-0014](../adr/0014-shader-toolchain.md) | auto (`cargo tree`), review |
-| SPN-INV-084 | `build.rs` scripts never invoke external compilers such as `slangc` (*proposed*). | [ADR-0014](../adr/0014-shader-toolchain.md) | review |
+| SPN-INV-084 | `build.rs` scripts never invoke external compilers such as `slangc`. | [ADR-0014](../adr/0014-shader-toolchain.md) | review |
 
 ## Platforms and hardware
 

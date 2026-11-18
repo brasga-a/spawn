@@ -28,7 +28,7 @@ Update an ADR's status, alternatives, consequences, and supersession links when 
 | [ADR-0011](0011-ecs-architecture.md) | Accepted | In-house ECS (archetypes + sparse sets, deterministic scheduling); `bevy_ecs` as primary reference |
 | [ADR-0012](0012-job-system.md) | Accepted | In-house work-stealing job system in a new `spawn-jobs` crate (tasks, no fibers) |
 | [ADR-0013](0013-declarative-data-format.md) | Accepted | RON + `serde` for authoring, cooked binary at runtime |
-| [ADR-0014](0014-shader-toolchain.md) | Proposed | Slang compiled by `spawn-cli`, never in `build.rs` |
+| [ADR-0014](0014-shader-toolchain.md) | Accepted | Slang compiled by `spawn-cli`, never in `build.rs` |
 | [ADR-0015](0015-asset-pipeline.md) | Accepted | glTF primary + FBX via ufbx; PNG/JPEG/EXR by role; UUID `.meta` identity; cooked formats |
 | [ADR-0016](0016-networking-and-replication.md) | Proposed | In-house UDP protocol, snapshot deltas, prediction, lag compensation |
 | [ADR-0017](0017-luau-scripting-runtime.md) | Proposed | `mlua` + Luau: VMs, sandbox, limits, API versioning |
