@@ -37,6 +37,12 @@ pub enum RenderErrorKind {
     ValidationUnavailable,
     /// `REND-0009`: the renderer stopped after an earlier fatal error.
     RendererFailed,
+    /// `REND-0010`: a cooked shader artifact is corrupt, truncated, oversized,
+    /// or uses an unsupported format version.
+    InvalidShaderArtifact,
+    /// `REND-0011`: a cooked shader's reflected interface does not match the
+    /// expected pipeline layout.
+    ShaderLayoutMismatch,
 }
 
 impl RenderErrorKind {
@@ -52,6 +58,8 @@ impl RenderErrorKind {
             Self::GpuTimeout => "REND-0007",
             Self::ValidationUnavailable => "REND-0008",
             Self::RendererFailed => "REND-0009",
+            Self::InvalidShaderArtifact => "REND-0010",
+            Self::ShaderLayoutMismatch => "REND-0011",
         }
     }
 
@@ -67,6 +75,8 @@ impl RenderErrorKind {
             Self::GpuTimeout => "GPU work did not complete in time",
             Self::ValidationUnavailable => "the Vulkan validation layer is not installed",
             Self::RendererFailed => "the renderer stopped after an earlier fatal error",
+            Self::InvalidShaderArtifact => "invalid cooked shader artifact",
+            Self::ShaderLayoutMismatch => "shader interface does not match pipeline layout",
         }
     }
 }
@@ -225,9 +235,11 @@ mod tests {
             K::GpuTimeout,
             K::ValidationUnavailable,
             K::RendererFailed,
+            K::InvalidShaderArtifact,
+            K::ShaderLayoutMismatch,
         ];
         let codes: Vec<_> = kinds.iter().map(|kind| kind.code()).collect();
-        let expected: Vec<_> = (1..=9).map(|n| format!("REND-{n:04}")).collect();
+        let expected: Vec<_> = (1..=11).map(|n| format!("REND-{n:04}")).collect();
         assert_eq!(codes, expected);
     }
 

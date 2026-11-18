@@ -19,3 +19,8 @@ vulkan = ["dep:ash", "dep:raw-window-handle"]
 [dependencies]
 ash = { workspace = true, optional = true, features = ["loaded", "std"] }
 raw-window-handle = { workspace = true, optional = true }
+
+[dev-dependencies]
+arbitrary = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true, features = ["std"] }

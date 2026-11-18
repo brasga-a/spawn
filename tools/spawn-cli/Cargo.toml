@@ -8,4 +8,15 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "spawn"
+path = "src/main.rs"
+
 [dependencies]
+clap = { workspace = true, features = ["std", "help", "usage", "error-context", "suggestions"] }
+rspirv = { workspace = true }
+spawn-render = { version = "0.1.0", path = "../../crates/spawn-render", default-features = false }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true, features = ["std"] }

@@ -26,19 +26,19 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 | `ron` | MIT/Apache-2.0 | dep | data-defining crates | Authored data format | [0013](adr/0013-declarative-data-format.md) | no |
 | `mlua` (feature `luau`) | MIT | dep | `spawn-scripting` | Luau integration | [0017](adr/0017-luau-scripting-runtime.md) (proposed) | no |
 | ufbx bindings | MIT | tool | `spawn-cli` | FBX import | [0015](adr/0015-asset-pipeline.md) | no |
-| `slangc` (external compiler) | Apache-2.0 WITH LLVM-exception | tool | `spawn-cli` | Slang → SPIR-V | [0004](adr/0004-in-house-graphics-api.md), [0014](adr/0014-shader-toolchain.md) | no |
+| `slangc` (external compiler) | Apache-2.0 WITH LLVM-exception | tool | `spawn-cli` | Slang → SPIR-V | [0004](adr/0004-in-house-graphics-api.md), [0014](adr/0014-shader-toolchain.md) | yes (`spawn-cli`, external binary pinned at `2026.22`) |
 | `cargo-deny` | MIT/Apache-2.0 | tool | CI | License and advisory checks | [0008](adr/0008-third-party-license-policy.md) | yes (CI) |
 
 ## Testing and quality
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | yes (`spawn-math` dev-dependency) |
-| `cargo-fuzz` | MIT/Apache-2.0 | test | parsers (packets, RON, glTF, cooked assets, packages) | Fuzzing | no |
-| `arbitrary` | MIT/Apache-2.0 | test | parsers | Structured fuzz inputs | no |
+| `proptest` | MIT/Apache-2.0 | test | all crates | Property-based tests | yes (`spawn-math`, `spawn-render`, `spawn-cli` dev-deps) |
+| `cargo-fuzz` | MIT/Apache-2.0 | test | parsers (packets, RON, glTF, cooked assets, packages) | Fuzzing | yes (`crates/spawn-render/fuzz`, excluded standalone fuzz package) |
+| `arbitrary` | MIT/Apache-2.0 | test | parsers | Structured fuzz inputs | yes (`spawn-render` dev-deps and `crates/spawn-render/fuzz`) |
 | `loom` | MIT | test | `spawn-jobs`, lock-free code | Concurrency model checking | no |
 | `criterion` or `divan` (choose one) | MIT/Apache-2.0 | test | all crates | Benchmarks on the reference hardware | no |
-| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | yes (`spawn-math` dev-dependency) |
+| `insta` | Apache-2.0 | test | all crates | Snapshot tests (e.g. error report format) | yes (`spawn-math`, `spawn-render`, `spawn-cli` dev-deps) |
 | `cargo-nextest` | MIT/Apache-2.0 | tool | CI, local | Faster test runner | no |
 
 ## Profiling and diagnostics
@@ -92,7 +92,7 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 | `zune-jpeg` | MIT/Apache-2.0/Zlib | tool | `spawn-cli` | JPEG decoding | no |
 | `exr` | BSD-3 | tool | `spawn-cli` | EXR (HDR) decoding | no |
 | `intel_tex_2` | MIT | tool | `spawn-cli` | BC7/BC6H/BC5 compression | no |
-| `rspirv` | Apache-2.0 | tool | `spawn-cli` | SPIR-V inspection if Slang reflection is insufficient | no |
+| `rspirv` | Apache-2.0 | tool | `spawn-cli` | SPIR-V inspection if Slang reflection is insufficient | yes (`spawn-cli` 0.13) |
 | `notify` | CC0 | tool | `spawn-cli`, `spawn-editor` | File watching for hot reload | no |
 | `gpu-allocator` | MIT/Apache-2.0 | fallback | `spawn-render` | Replacement if the in-house allocator is not viable | no |
 
@@ -133,7 +133,7 @@ Rules ([ADR-0008](adr/0008-third-party-license-policy.md), root [Workspace](../A
 
 | Crate | License | Kind | Where | Purpose | In use |
 | --- | --- | --- | --- | --- | --- |
-| `clap` | MIT/Apache-2.0 | tool | `spawn-cli` | Command-line arguments | no |
+| `clap` | MIT/Apache-2.0 | tool | `spawn-cli` | Command-line arguments | yes (`spawn-cli` 4.6) |
 | `rmcp` | MIT/Apache-2.0 | tool | `spawn-mcp` | MCP SDK (confirm maturity before adoption) | no |
 
 ## Rejected
