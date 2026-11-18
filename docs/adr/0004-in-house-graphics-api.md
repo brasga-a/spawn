@@ -31,7 +31,7 @@ Spawn builds its own graphics API (a rendering hardware interface, RHI) inside `
 1. **Vulkan bindings: `ash`** (raw Vulkan declarations and loader, no abstraction logic), consistent with the binding policy of [ADR-0001](0001-in-house-platform-layer.md). Hand-written declarations add risk without adding control.
 2. **Vulkan baseline: 1.3**, with dynamic rendering, synchronization2, timeline semaphores and descriptor indexing (bindless) as required features. Older GPUs/drivers without these are not supported; the minimum hardware is recorded once verified. **Verified on the reference hardware:** AMD Radeon RX 460 (Polaris) with RADV reports Vulkan 1.4. Polaris has no hardware ray tracing or mesh shaders; those features need other hardware to develop and test.
 3. **GPU memory allocator: in-house**, starting with a simple block allocator and growing with measured needs. Vulkan Memory Allocator and `gpu-allocator` are references, not dependencies.
-4. **Shader toolchain: Slang, compiled offline to SPIR-V.** Writing a shader compiler is out of scope. The runtime loads SPIR-V only. Slang can also emit DXIL if a D3D12 backend is ever added. How the compiler is installed and invoked: [ADR-0014](0014-shader-toolchain.md) (proposed).
+4. **Shader toolchain: Slang, compiled offline to SPIR-V.** Writing a shader compiler is out of scope. The runtime loads SPIR-V only. Slang can also emit DXIL if a D3D12 backend is ever added. How the compiler is installed and invoked: [ADR-0014](0014-shader-toolchain.md).
 5. **Location: private module of `spawn-render`.** A separate crate is created only if a second consumer (e.g. `spawn-editor` tooling) needs the RHI directly, which requires its own decision.
 
 ## References

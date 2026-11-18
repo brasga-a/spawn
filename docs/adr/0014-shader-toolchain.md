@@ -1,6 +1,6 @@
 # ADR-0014 — Shader Toolchain Integration
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Scope:** How Slang shaders ([ADR-0004](0004-in-house-graphics-api.md)) are compiled, versioned, loaded and hot-reloaded.  
 **Related:** [ADR-0015](0015-asset-pipeline.md) (asset pipeline), [ADR-0007](0007-toolchain-lints-and-ci.md) (CI).
 
@@ -33,7 +33,7 @@ ADR-0004 chose Slang compiled offline to SPIR-V and deferred how the compiler is
 
 - **Toolchain drift** between developers and CI. Mitigation: version check in `spawn-cli`.
 - **Driver pipeline compilation stutter** when pipelines are first created. Mitigation: pipeline cache and pre-creation at load time; measured on the reference hardware.
-- **Slang license** must be verified under [ADR-0008](0008-third-party-license-policy.md) as a development-only tool.
+- **Slang license:** verified under [ADR-0008](0008-third-party-license-policy.md) as `Apache-2.0 WITH LLVM-exception` (permissive, no royalties or copyleft; development-only external compiler).
 
 ## Revisit triggers
 
@@ -41,4 +41,4 @@ Hot reload latency is too high; variants grow beyond the budget; a D3D12 backend
 
 ## Acceptance conditions
 
-Owner review before the first shader.
+Accepted by owner review before the first shader (`Apache-2.0 WITH LLVM-exception` license verified).

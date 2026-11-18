@@ -19,7 +19,7 @@ Command-line tooling for development workflows: project creation, building, runn
 
 ## Architectural Boundaries
 
-- Depends on engine crates, never the reverse. Must not be depended on by engine crates. Headless: must not require `spawn-platform` windowing or `spawn-render`, except for explicitly graphical commands.
+- Depends on engine crates, never the reverse. Must not be depended on by engine crates. Headless: must not require `spawn-platform` windowing or `spawn-render` GPU backends (`vulkan` feature); may depend on headless `spawn-render` (`default-features = false`) for shared shader/format contracts, except for explicitly graphical commands.
 - Any capability shared with the editor or MCP server belongs in an engine crate or a deliberately agreed shared layer, not copy-pasted between tools.
 
 ## Public API Guidelines
@@ -40,9 +40,9 @@ Command-line tooling for development workflows: project creation, building, runn
 
 ## Governing Decisions
 
-- **Accepted (binding):** [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (asset pipeline), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0013](../../docs/adr/0013-declarative-data-format.md) (data format). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
-- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain), [ADR-0024](../../docs/adr/0024-packages-and-game-extensions.md) (packages and extensions), [ADR-0025](../../docs/adr/0025-mods-and-workshop.md) (mods and Workshop).
-- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `clap`, `gltf`, `ufbx` bindings, `meshopt`, `mikktspace`, `png`, `zune-jpeg`, `exr`, `intel_tex_2`, `rspirv`, `notify`, `slangc` (external, license to verify). Any other crate needs owner approval first.
+- **Accepted (binding):** [ADR-0015](../../docs/adr/0015-asset-pipeline.md) (asset pipeline), [ADR-0004](../../docs/adr/0004-in-house-graphics-api.md) (graphics API), [ADR-0013](../../docs/adr/0013-declarative-data-format.md) (data format), [ADR-0014](../../docs/adr/0014-shader-toolchain.md) (shader toolchain). Global rules: [INVARIANTS](../../docs/architecture/INVARIANTS.md), [GATES](../../docs/architecture/GATES.md).
+- **Proposed (not binding yet; do not implement contrary designs):** [ADR-0024](../../docs/adr/0024-packages-and-game-extensions.md) (packages and extensions), [ADR-0025](../../docs/adr/0025-mods-and-workshop.md) (mods and Workshop).
+- **Approved third-party crates** ([DEPENDENCIES](../../docs/DEPENDENCIES.md)): `clap`, `gltf`, `ufbx` bindings, `meshopt`, `mikktspace`, `png`, `zune-jpeg`, `exr`, `intel_tex_2`, `rspirv`, `notify`, `slangc` (external, Apache-2.0 WITH LLVM-exception). Any other crate needs owner approval first.
 
 ## Current Implementation Status
 
