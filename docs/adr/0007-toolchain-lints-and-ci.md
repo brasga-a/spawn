@@ -55,3 +55,5 @@ A required feature needs nightly; GPU tests become necessary for regressions; CI
 ## Acceptance conditions
 
 Accepted by the owner. **Applied:** `rust-toolchain.toml`, `clippy.toml`, `[workspace.lints]` with `[lints] workspace = true` in every package, dev profiles, `.github/workflows/ci.yml`, `deny.toml` and `scripts/check.sh`. Lint enforcement verified locally (an `unwrap()` and an undocumented public function are rejected). CI and `cargo-deny` are verified on the first pull request.
+
+**Owner-approved exception (Milestone 2 audit):** the CI job `fuzz` installs a nightly toolchain **only** to run `cargo fuzz run` with LLVM AddressSanitizer and SanitizerCoverage over the standalone Gate G2 fuzz package (`crates/spawn-render/fuzz`), plus `cargo deny` for that package. Nightly never builds, lints, or tests the engine; the pinned stable toolchain remains the minimum supported Rust version and the only toolchain of every other job and of `scripts/check.sh`.
